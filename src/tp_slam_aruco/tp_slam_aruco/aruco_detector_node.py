@@ -27,7 +27,7 @@ import numpy as np
 
 import rclpy
 from rclpy.node import Node
-from sensor_msgs.msg import Image
+from sensor_msgs.msg import Image, CameraInfo
 from visualization_msgs.msg import Marker, MarkerArray
 from geometry_msgs.msg import Point
 
@@ -43,51 +43,108 @@ class ArucoDetectorNode(Node):
         super().__init__('aruco_detector_node')
 
         # --- Parámetros ---
-        self.declare_parameter('image_topic', 'tb4_0/oakd/rgb/image_raw')
-        self.declare_parameter('calibration_file', '')  # ruta al yaml de K y coefs
-        self.declare_parameter('marker_length', 0.15)    # lado del ArUco en metros
+        self.declare_parameter('image_topic', 'tb4_0/oakd/rgb/preview/image_raw')
+        self.declare_parameter('calibration_file', '')  # ruta al yaml de K y coefs (fallback)
+        self.declare_parameter('marker_length', 0.0889)  # lado del ArUco en metros
         self.declare_parameter('aruco_dict', 'DICT_4X4_50')
+        # frame_id del frame de la cámara; si está vacío se usa el del mensaje.
+        self.declare_parameter('camera_frame', '')
 
         image_topic = self.get_parameter('image_topic').value
         calib_file = self.get_parameter('calibration_file').value
         self.marker_length = self.get_parameter('marker_length').value
         dict_name = self.get_parameter('aruco_dict').value
+        self.camera_frame = self.get_parameter('camera_frame').value
 
-        # Cargamos la calibración de la cámara (matriz K + coeficientes de
-        # distorsión). Vienen provistas por la cátedra (TB4 #0).
+        # Calibración de la cámara: se obtiene del tópico camera_info (fuente
+        # canónica y siempre consistente con el bag). El YAML es fallback por
+        # si el tópico no está disponible. Nota: el modelo rational_polynomial
+        # del OAK-D usa 8 coeficientes de distorsión, no 5.
+        self.camera_matrix = None
+        self.dist_coeffs = None
+        self._calib_from_topic = False  # True cuando ya recibimos camera_info
+
         if calib_file:
-            self.camera_matrix, self.dist_coeffs = load_camera_calibration(calib_file)
-            self.get_logger().info(f'Calibración cargada desde {calib_file}')
-        else:
-            # Fallback: sin calibración no podemos estimar distancias reales.
-            self.camera_matrix, self.dist_coeffs = None, None
-            self.get_logger().warn(
-                'Sin archivo de calibración. La detección 2D funcionará, '
-                'pero NO la estimación de pose 3D. Pasá calibration_file.'
-            )
+            try:
+                self.camera_matrix, self.dist_coeffs, marker_size = load_camera_calibration(calib_file)
+                self.get_logger().info(f'Calibración fallback cargada desde {calib_file}')
+                if marker_size is not None:
+                    try:
+                        self.marker_length = float(marker_size)
+                    except Exception:
+                        pass
+            except Exception as e:
+                self.get_logger().warn(f'No se pudo cargar calibración YAML: {e}')
+
+        # Tópico camera_info: se infiere del tópico de imagen (convención ROS).
+        # Si la imagen es /foo/image_raw, el camera_info es /foo/camera_info.
+        info_topic = image_topic.replace('image_raw', 'camera_info')
+        from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy, qos_profile_sensor_data
+        _best_effort = QoSProfile(
+            reliability=ReliabilityPolicy.BEST_EFFORT,
+            history=HistoryPolicy.KEEP_LAST,
+            depth=1,
+        )
+        self.create_subscription(CameraInfo, info_topic, self._camera_info_cb, _best_effort)
+        self.get_logger().info(f'Esperando calibración desde "{info_topic}"...')
 
         # Diccionario de ArUco. El TB4 de la cátedra usa un diccionario
         # concreto; ajustar el parámetro aruco_dict si no detecta nada.
-        self.aruco_dict = cv2.aruco.getPredefinedDictionary(
-            getattr(cv2.aruco, dict_name)
-        )
-        self.detector_params = cv2.aruco.DetectorParameters()
-        self.detector = cv2.aruco.ArucoDetector(
-            self.aruco_dict, self.detector_params
-        )
+        # Soporte para OpenCV 4.5 (API legacy) y 4.6+ (API nueva con ArucoDetector).
+        aruco_dict_id = getattr(cv2.aruco, dict_name)
+        if hasattr(cv2.aruco, 'ArucoDetector'):
+            # OpenCV >= 4.6
+            _dict = cv2.aruco.getPredefinedDictionary(aruco_dict_id)
+            _params = cv2.aruco.DetectorParameters()
+            _det = cv2.aruco.ArucoDetector(_dict, _params)
+            self._detect_markers = _det.detectMarkers
+        else:
+            # OpenCV 4.5.x — API legacy todavía funcional
+            _dict = cv2.aruco.Dictionary_get(aruco_dict_id)
+            _params = cv2.aruco.DetectorParameters_create()
+            self._detect_markers = lambda gray: cv2.aruco.detectMarkers(
+                gray, _dict, parameters=_params
+            )
 
         self.bridge = CvBridge()
 
         # Suscripción a la imagen y publicador de markers para visualizar
         # las detecciones en RViz (tópico /landmarks del enunciado).
         self.sub = self.create_subscription(
-            Image, image_topic, self.image_callback, 10
+            Image, image_topic, self.image_callback, qos_profile_sensor_data
         )
         self.marker_pub = self.create_publisher(MarkerArray, '/landmarks', 10)
 
         self.get_logger().info(
             f'aruco_detector_node escuchando imágenes en "{image_topic}". '
             f'Diccionario={dict_name}, lado={self.marker_length} m.'
+        )
+
+    def _camera_info_cb(self, msg: CameraInfo):
+        """Toma la calibración directamente del tópico camera_info del driver.
+
+        Es la fuente canónica: siempre coincide con el bag/cámara real,
+        soporta el modelo rational_polynomial (8 coeficientes) del OAK-D,
+        y evita errores por YAML desactualizado. Se ejecuta solo hasta
+        recibir el primer mensaje válido.
+        """
+        if self._calib_from_topic:
+            return  # ya inicializado; no recalcular en cada frame
+
+        K = msg.k  # float64[9], row-major
+        D = msg.d  # float64[], variable length (5 o 8 según el modelo)
+
+        if len(K) != 9 or len(D) == 0:
+            return
+
+        self.camera_matrix = np.array(K, dtype=np.float64).reshape(3, 3)
+        self.dist_coeffs = np.array(D, dtype=np.float64).reshape(1, -1)
+        self._calib_from_topic = True
+
+        self.get_logger().info(
+            f'Calibración recibida desde camera_info '
+            f'(modelo={msg.distortion_model}, {len(D)} coefs). '
+            f'fx={K[0]:.2f} fy={K[4]:.2f} cx={K[2]:.2f} cy={K[5]:.2f}'
         )
 
     def image_callback(self, msg: Image):
@@ -102,7 +159,7 @@ class ArucoDetectorNode(Node):
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
 
         # Detección 2D: devuelve las esquinas de cada marcador y sus IDs.
-        corners, ids, _rejected = self.detector.detectMarkers(gray)
+        corners, ids, _rejected = self._detect_markers(gray)
 
         if ids is None or len(ids) == 0:
             return  # ningún marcador en este frame
@@ -135,6 +192,12 @@ class ArucoDetectorNode(Node):
         for det in detections:
             m = Marker()
             m.header = header
+            # Usamos el frame explícito si fue configurado; si no, confiamos
+            # en el frame_id que venga en el header de la imagen (lo provee
+            # el driver de cámara). graph_slam_node usa este frame_id para
+            # hacer el TF lookup cámara→base_link.
+            if self.camera_frame:
+                m.header.frame_id = self.camera_frame
             m.ns = 'aruco'
             m.id = int(det['id'])
             m.type = Marker.CUBE
@@ -144,7 +207,13 @@ class ArucoDetectorNode(Node):
                 y=float(det['tvec'][1]),
                 z=float(det['tvec'][2]),
             )
-            m.pose.orientation.w = 1.0
+            # Orientación real del marcador: convertimos el rvec (Rodrigues)
+            # a quaternion para visualizar la pose completa en RViz.
+            qx, qy, qz, qw = self._rvec_to_quaternion(det['rvec'])
+            m.pose.orientation.x = qx
+            m.pose.orientation.y = qy
+            m.pose.orientation.z = qz
+            m.pose.orientation.w = qw
             m.scale.x = m.scale.y = m.scale.z = 0.1
             m.color.r = 1.0
             m.color.g = 1.0
@@ -152,6 +221,37 @@ class ArucoDetectorNode(Node):
             marker_array.markers.append(m)
         if marker_array.markers:
             self.marker_pub.publish(marker_array)
+
+    @staticmethod
+    def _rvec_to_quaternion(rvec):
+        """Convierte un vector de Rodrigues a quaternion (x, y, z, w)."""
+        R, _ = cv2.Rodrigues(np.array(rvec, dtype=np.float64))
+        trace = R[0, 0] + R[1, 1] + R[2, 2]
+        if trace > 0.0:
+            s = 0.5 / np.sqrt(trace + 1.0)
+            w = 0.25 / s
+            x = (R[2, 1] - R[1, 2]) * s
+            y = (R[0, 2] - R[2, 0]) * s
+            z = (R[1, 0] - R[0, 1]) * s
+        elif R[0, 0] > R[1, 1] and R[0, 0] > R[2, 2]:
+            s = 2.0 * np.sqrt(1.0 + R[0, 0] - R[1, 1] - R[2, 2])
+            w = (R[2, 1] - R[1, 2]) / s
+            x = 0.25 * s
+            y = (R[0, 1] + R[1, 0]) / s
+            z = (R[0, 2] + R[2, 0]) / s
+        elif R[1, 1] > R[2, 2]:
+            s = 2.0 * np.sqrt(1.0 + R[1, 1] - R[0, 0] - R[2, 2])
+            w = (R[0, 2] - R[2, 0]) / s
+            x = (R[0, 1] + R[1, 0]) / s
+            y = 0.25 * s
+            z = (R[1, 2] + R[2, 1]) / s
+        else:
+            s = 2.0 * np.sqrt(1.0 + R[2, 2] - R[0, 0] - R[1, 1])
+            w = (R[1, 0] - R[0, 1]) / s
+            x = (R[0, 2] + R[2, 0]) / s
+            y = (R[1, 2] + R[2, 1]) / s
+            z = 0.25 * s
+        return x, y, z, w
 
 
 def main(args=None):

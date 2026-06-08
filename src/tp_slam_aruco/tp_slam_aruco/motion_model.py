@@ -77,7 +77,7 @@ def compute_delta(pose_prev, pose_curr) -> OdometryDelta:
     # δrot1: ángulo entre la orientación previa y la dirección de avance.
     # Si el robot casi no se trasladó (trans ~ 0), atan2(dy,dx) es ruido puro,
     # así que en ese caso lo dejamos en 0 para no inventar una rotación.
-    if trans < 1e-6:
+    if trans < 1e-3:
         rot1 = 0.0
     else:
         rot1 = normalize_angle(math.atan2(dy, dx) - th_prev)

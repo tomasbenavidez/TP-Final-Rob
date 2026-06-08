@@ -20,11 +20,14 @@ setup(
         # Archivos de configuración (yaml, rviz, calibración de cámara)
         (os.path.join('share', package_name, 'config'),
             glob('config/*')),
+        # Carpeta de salida de corridas (el nodo escribe aquí al terminar)
+        (os.path.join('share', package_name, 'runs'),
+            glob('runs/*')),
     ],
     install_requires=['setuptools'],
     zip_safe=True,
     maintainer='Equipo TP Final',
-    maintainer_email='equipo@udesa.edu.ar',
+    maintainer_email='',
     description='Graph SLAM con ArUco + LIDAR sobre TurtleBot4 (Opción 3)',
     license='MIT',
     tests_require=['pytest'],

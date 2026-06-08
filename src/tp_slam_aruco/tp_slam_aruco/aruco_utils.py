@@ -28,6 +28,9 @@ def load_camera_calibration(path: str):
     with open(path, 'r') as f:
         data = yaml.safe_load(f)
 
+    # Extraemos también el tamaño del marcador si está presente
+    marker_size = None
+
     # Formato OpenCV
     if 'camera_matrix' in data and isinstance(data['camera_matrix'], dict):
         k = data['camera_matrix']
@@ -36,13 +39,16 @@ def load_camera_calibration(path: str):
         )
         d = data['distortion_coefficients']
         dist_coeffs = np.array(d['data'], dtype=np.float64).reshape(1, -1)
-        return camera_matrix, dist_coeffs
+        # marker_size puede estar en la raíz del YAML
+        marker_size = data.get('marker_size_m', None)
+        return camera_matrix, dist_coeffs, marker_size
 
     # Formato simple
     camera_matrix = np.array(data['camera_matrix'], dtype=np.float64).reshape(3, 3)
     dist_key = 'dist_coeffs' if 'dist_coeffs' in data else 'distortion_coefficients'
     dist_coeffs = np.array(data[dist_key], dtype=np.float64).reshape(1, -1)
-    return camera_matrix, dist_coeffs
+    marker_size = data.get('marker_size_m', None)
+    return camera_matrix, dist_coeffs, marker_size
 
 
 def estimate_marker_poses(corners, ids, marker_length,
