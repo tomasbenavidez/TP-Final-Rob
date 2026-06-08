@@ -6,6 +6,7 @@ Lanza el pipeline de SLAM de la Parte A (Opción 3):
   - tf_bridge_node      : repubica el TF del bag a /tf y /tf_static
   - aruco_detector_node : detecta los landmarks ArUco
   - graph_slam_node     : construye y optimiza el grafo
+  - rviz2               : vista en tiempo simulado con trayectoria, TF e imagen
 
 USO:
   # Terminal 1: reproducir el bag del laberinto
@@ -32,6 +33,12 @@ from launch_ros.actions import SetParameter
 
 
 def generate_launch_description():
+    rviz_default_config = os.path.join(
+        get_package_share_directory('tp_slam_aruco'),
+        'config',
+        'rviz_config.rviz',
+    )
+
     calib_arg = DeclareLaunchArgument(
         'calibration_file',
         default_value='',
@@ -104,6 +111,16 @@ def generate_launch_description():
         default_value='true',
         description='Usar reloj de simulación (necesario al reproducir un bag con --clock)',
     )
+    launch_rviz_arg = DeclareLaunchArgument(
+        'launch_rviz',
+        default_value='true',
+        description='Lanzar RViz sincronizado con /clock como parte del pipeline.',
+    )
+    rviz_config_arg = DeclareLaunchArgument(
+        'rviz_config',
+        default_value=rviz_default_config,
+        description='Ruta al archivo .rviz para la visualizacion de Parte A.',
+    )
 
     calibration_file = LaunchConfiguration('calibration_file')
     camera_frame = LaunchConfiguration('camera_frame')
@@ -118,6 +135,9 @@ def generate_launch_description():
     camera_ty = LaunchConfiguration('camera_ty')
     camera_yaw = LaunchConfiguration('camera_yaw')
     trajectory_file = LaunchConfiguration('trajectory_file')
+    use_sim_time = LaunchConfiguration('use_sim_time')
+    launch_rviz = LaunchConfiguration('launch_rviz')
+    rviz_config = LaunchConfiguration('rviz_config')
 
     tf_bridge_node = Node(
         package='tp_slam_aruco',
@@ -165,6 +185,16 @@ def generate_launch_description():
         }],
     )
 
+    rviz_node = Node(
+        package='rviz2',
+        executable='rviz2',
+        name='rviz2',
+        output='screen',
+        condition=IfCondition(launch_rviz),
+        arguments=['-d', rviz_config],
+        parameters=[{'use_sim_time': use_sim_time}],
+    )
+
     return LaunchDescription([
         calib_arg,
         camera_frame_arg,
@@ -180,8 +210,11 @@ def generate_launch_description():
         camera_yaw_arg,
         trajectory_file_arg,
         use_sim_time_arg,
-        SetParameter(name='use_sim_time', value=LaunchConfiguration('use_sim_time')),
+        launch_rviz_arg,
+        rviz_config_arg,
+        SetParameter(name='use_sim_time', value=use_sim_time),
         tf_bridge_node,
         aruco_node,
         graph_slam_node,
+        rviz_node,
     ])

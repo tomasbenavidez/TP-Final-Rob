@@ -4,7 +4,8 @@ import numpy as np
 
 import rclpy # type: ignore
 from rclpy.node import Node
-from nav_msgs.msg import Odometry
+from geometry_msgs.msg import PoseArray, PoseStamped
+from nav_msgs.msg import Odometry, Path
 from visualization_msgs.msg import MarkerArray
 
 import gtsam

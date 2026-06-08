@@ -14,7 +14,7 @@ La ruta real del workspace en este repo es:
 
 - **1ra pasada:** deteccion ArUco + Graph SLAM -> `trajectory.json`
 - **2da pasada:** trayectoria fija + LIDAR -> `mapa.pgm` y `mapa.yaml`
-- **RViz:** se abre aparte, no lo lanza `parte_a_slam.launch.py`
+- **RViz:** se abre automaticamente desde `parte_a_slam.launch.py`
 
 ## Estructura minima
 
@@ -79,6 +79,8 @@ Que deberias ver:
 - `/landmarks_opt`
 - `/trajectory_optimized`
 - TF `map -> odom`
+- RViz abriendose solo, ya sincronizado con `/clock`
+- La imagen de la camara en el panel inferior izquierdo
 
 Cuando frenes el launch con `Ctrl+C`, se guarda:
 
@@ -86,14 +88,17 @@ Cuando frenes el launch con `Ctrl+C`, se guarda:
 /tmp/trayectoria.json
 ```
 
-## RViz
+## RViz manual (opcional)
 
-RViz es un paso manual.
+Normalmente no hace falta porque `parte_a_slam.launch.py` ya lo abre.
+Si queres levantarlo aparte, usa reloj simulado explicitamente:
 
 ```bash
 cd /Users/franco/TP-Final-Rob/tp_final_ws
 source install/setup.bash
-ros2 run rviz2 rviz2 -d /Users/franco/TP-Final-Rob/tp_final_ws/src/tp_slam_aruco/config/rviz_config.rviz
+ros2 run rviz2 rviz2 \
+  --ros-args -p use_sim_time:=true \
+  -d /Users/franco/TP-Final-Rob/tp_final_ws/src/tp_slam_aruco/config/rviz_config.rviz
 ```
 
 ## Parte A - 2da pasada
