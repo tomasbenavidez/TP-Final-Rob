@@ -30,7 +30,6 @@ setup(
     maintainer_email='',
     description='Graph SLAM con ArUco + LIDAR sobre TurtleBot4 (Opción 3)',
     license='MIT',
-    tests_require=['pytest'],
     entry_points={
         'console_scripts': [
             # Cada línea registra un nodo ejecutable: 'nombre = paquete.modulo:main'
@@ -39,6 +38,7 @@ setup(
             'odometry = tp_slam_aruco.odometry_node:main',
             'graph_slam = tp_slam_aruco.graph_slam_node:main',
             'occupancy_grid = tp_slam_aruco.occupancy_grid_node:main',
+            'tf_bridge = tp_slam_aruco.tf_bridge_node:main',
         ],
     },
 )

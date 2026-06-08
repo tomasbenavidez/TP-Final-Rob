@@ -4,9 +4,8 @@ import numpy as np
 
 import rclpy # type: ignore
 from rclpy.node import Node
-from nav_msgs.msg import Odometry, Path
-from visualization_msgs.msg import MarkerArray, Marker
-from geometry_msgs.msg import PoseStamped, PoseArray, Pose, TransformStamped
+from nav_msgs.msg import Odometry
+from visualization_msgs.msg import MarkerArray
 
 import gtsam
 from gtsam import Pose2, Point2, Rot2
@@ -15,6 +14,26 @@ from gtsam.symbol_shorthand import X, L
 from tf2_ros import Buffer, TransformBroadcaster, TransformListener
 
 from tp_slam_aruco.motion_model import yaw_from_quaternion, normalize_angle
+from tp_slam_aruco.slam_gating import (
+    innovation_mahalanobis_sq,
+    observation_sigmas,
+    resolve_gate_state,
+)
+from tp_slam_aruco.slam_geometry import (
+    CameraExtrinsics,
+    TB4_CAMERA_EXTRINSICS,
+    fallback_camera_to_base_xy,
+    transform_stamped_to_base_xy,
+)
+from tp_slam_aruco.slam_graph import optimize_graph
+from tp_slam_aruco.slam_io import write_trajectory_json
+from tp_slam_aruco.slam_publish import (
+    build_belief_message,
+    build_landmark_markers,
+    build_map_to_odom_transform,
+    build_path_message,
+    build_pose_array_message,
+)
 
 from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
 from rclpy.clock import Clock, ClockType
@@ -37,9 +56,9 @@ class GraphSlamNode(Node):
         self.declare_parameter('odom_frame', 'odom')
         self.declare_parameter('base_frame', 'base_link')
         # Extrínsecos cámara->base (fallback si no hay TF)
-        self.declare_parameter('camera_tx', 0.0)
-        self.declare_parameter('camera_ty', 0.0)
-        self.declare_parameter('camera_yaw', 0.0)
+        self.declare_parameter('camera_tx', TB4_CAMERA_EXTRINSICS.tx)
+        self.declare_parameter('camera_ty', TB4_CAMERA_EXTRINSICS.ty)
+        self.declare_parameter('camera_yaw', TB4_CAMERA_EXTRINSICS.yaw)
         # Ruta JSON para exportar trayectoria+landmarks al finalizar el bag
         self.declare_parameter('trajectory_file', '')
 
@@ -54,9 +73,11 @@ class GraphSlamNode(Node):
         self.map_frame = self.get_parameter('map_frame').value
         self.odom_frame = self.get_parameter('odom_frame').value
         self.base_frame = self.get_parameter('base_frame').value
-        self.cam_tx = self.get_parameter('camera_tx').value
-        self.cam_ty = self.get_parameter('camera_ty').value
-        self.cam_yaw = self.get_parameter('camera_yaw').value
+        self.camera_extrinsics = CameraExtrinsics(
+            tx=self.get_parameter('camera_tx').value,
+            ty=self.get_parameter('camera_ty').value,
+            yaw=self.get_parameter('camera_yaw').value,
+        )
 
         # ---------------- Estructuras del grafo ----------------
         self.graph = gtsam.NonlinearFactorGraph()
@@ -74,6 +95,7 @@ class GraphSlamNode(Node):
         self.kf_stamps: list = []           # timestamp (float s) de cada keyframe X(i)
 
         self.last_odom_stamp = None
+        self._warned_camera_tf_fallback = False
         # Usamos reloj de pared para que el timer se dispare a 20 Hz
         # independientemente de si se está reproduciendo un bag con --clock.
         # Sin reloj de pared, con use_sim_time=true y sin --clock el timer
@@ -123,8 +145,7 @@ class GraphSlamNode(Node):
     #  Bearing: crece con la distancia (a mas lejos, angulo menos confiable)
     # ============================================================
     def obs_noise(self, range_):
-        s_range = 0.0239 + 0.0315 * range_ ** 2
-        s_bearing = 0.10 + 0.05 * range_
+        s_bearing, s_range = observation_sigmas(range_)
         return gtsam.noiseModel.Diagonal.Sigmas(np.array([s_bearing, s_range]))
 
     # ============================================================
@@ -265,39 +286,22 @@ class GraphSlamNode(Node):
                     stamp,
                     timeout=rclpy.duration.Duration(seconds=0.05),
                 )
-                return self._transform_point_to_base_xy(tf, tx, ty, tz)
+                return transform_stamped_to_base_xy(tf, (tx, ty, tz))
             except Exception:
                 pass
 
-        # Fallback: asumimos que el marker viene en frame óptico de cámara
-        # y aplicamos la extrínseca 2D aproximada cámara->base.
-        p_cam_2d = np.array([tz, -tx])
-        cy = math.cos(self.cam_yaw)
-        sy = math.sin(self.cam_yaw)
-        x_base = cy * p_cam_2d[0] - sy * p_cam_2d[1] + self.cam_tx
-        y_base = sy * p_cam_2d[0] + cy * p_cam_2d[1] + self.cam_ty
-        return x_base, y_base
-
-    def _transform_point_to_base_xy(self, tf, x, y, z):
-        """Aplica una TransformStamped a un punto 3D y devuelve XY en base."""
-        qx = tf.transform.rotation.x
-        qy = tf.transform.rotation.y
-        qz = tf.transform.rotation.z
-        qw = tf.transform.rotation.w
-        tx = tf.transform.translation.x
-        ty = tf.transform.translation.y
-        tz = tf.transform.translation.z
-
-        r00 = 1.0 - 2.0 * (qy * qy + qz * qz)
-        r01 = 2.0 * (qx * qy - qz * qw)
-        r02 = 2.0 * (qx * qz + qy * qw)
-        r10 = 2.0 * (qx * qy + qz * qw)
-        r11 = 1.0 - 2.0 * (qx * qx + qz * qz)
-        r12 = 2.0 * (qy * qz - qx * qw)
-
-        x_base = r00 * x + r01 * y + r02 * z + tx
-        y_base = r10 * x + r11 * y + r12 * z + ty
-        return x_base, y_base
+        if not self._warned_camera_tf_fallback:
+            self.get_logger().warning(
+                'No se pudo resolver TF camara->base_link; usando extrinsecos fallback '
+                f'(tx={self.camera_extrinsics.tx}, ty={self.camera_extrinsics.ty}, '
+                f'yaw={self.camera_extrinsics.yaw}).'
+            )
+            self._warned_camera_tf_fallback = True
+        return fallback_camera_to_base_xy(
+            tx=tx,
+            tz=tz,
+            extrinsics=self.camera_extrinsics,
+        )
 
     MAX_OBS_PER_LANDMARK = 20
 
@@ -308,28 +312,21 @@ class GraphSlamNode(Node):
         actual. Rechaza si maha² > maha_threshold (chi2 2-DOF, 95% → 5.99).
         Solo actúa cuando hay un resultado optimizado disponible.
         """
-        if self.result is None:
+        state = resolve_gate_state(
+            result=self.result,
+            initial=self.initial,
+            pose_key=X(pose_index),
+            landmark_key=L(lm_id),
+        )
+        if state is None:
             return True
-        try:
-            pose = self.result.atPose2(X(pose_index))
-            lm = self.result.atPoint2(L(lm_id))
-        except Exception:
-            return True
-
-        dx = lm[0] - pose.x()
-        dy = lm[1] - pose.y()
-        pred_range = math.hypot(dx, dy)
-        pred_bearing = normalize_angle(math.atan2(dy, dx) - pose.theta())
-
-        innov = np.array([
-            normalize_angle(bearing - pred_bearing),
-            range_ - pred_range,
-        ])
-        s_b = 0.10 + 0.05 * range_
-        s_r = 0.0239 + 0.0315 * range_ ** 2
-        # Inversa de la covarianza diagonal 2x2
-        S_inv = np.diag([1.0 / s_b ** 2, 1.0 / s_r ** 2])
-        maha2 = float(innov @ S_inv @ innov)
+        pose, lm = state
+        maha2 = innovation_mahalanobis_sq(
+            pose=pose,
+            landmark=lm,
+            bearing=bearing,
+            range_=range_,
+        )
 
         if maha2 >= self.maha_threshold:
             self.get_logger().info(
@@ -401,27 +398,16 @@ class GraphSlamNode(Node):
     def optimize(self):
         if self.pose_count < 2:
             return
-        params = gtsam.LevenbergMarquardtParams()
-        optimizer = gtsam.LevenbergMarquardtOptimizer(
-            self.graph, self.initial, params)
-        err0 = self.graph.error(self.initial)
-        self.result = optimizer.optimize()
-        err1 = self.graph.error(self.result)
         try:
-            new_initial = gtsam.Values()
-            for i in range(self.pose_count):
-                try:
-                    new_initial.insert(X(i), self.result.atPose2(X(i)))
-                except Exception:
-                    pass
-            for lm_id in list(self.seen_landmarks):
-                try:
-                    new_initial.insert(L(lm_id), self.result.atPoint2(L(lm_id)))
-                except Exception:
-                    pass
-            self.initial = new_initial
-        except Exception:
-            self.get_logger().warning('No se pudo actualizar self.initial tras optimizar')
+            self.result, self.initial, err0, err1 = optimize_graph(
+                graph=self.graph,
+                initial=self.initial,
+                pose_count=self.pose_count,
+                landmark_ids=list(self.seen_landmarks),
+            )
+        except Exception as exc:
+            self.get_logger().error(f'optimize() fallo: {exc}')
+            return
         self.get_logger().info(
             f'Optimizado: {self.pose_count} poses, '
             f'{len(self.seen_landmarks)} landmarks. '
@@ -435,62 +421,20 @@ class GraphSlamNode(Node):
             return
 
         now = self.get_clock().now().to_msg()
-        last = self.result.atPose2(X(self.pose_count - 1))
+        poses = [self.result.atPose2(X(i)) for i in range(self.pose_count)]
+        last = poses[-1]
 
-        # /belief
-        bel = PoseStamped()
-        bel.header.frame_id = self.map_frame
-        bel.header.stamp = now
-        bel.pose.position.x = last.x()
-        bel.pose.position.y = last.y()
-        bel.pose.orientation.z = math.sin(last.theta() / 2.0)
-        bel.pose.orientation.w = math.cos(last.theta() / 2.0)
-        self.belief_pub.publish(bel)
+        self.belief_pub.publish(build_belief_message(self.map_frame, now, last))
+        self.poses_pub.publish(build_pose_array_message(self.map_frame, now, poses))
+        self.path_pub.publish(build_path_message(self.map_frame, now, poses))
 
-        # /poses_guardadas
-        pa = PoseArray()
-        pa.header = bel.header
-        for i in range(self.pose_count):
-            pi = self.result.atPose2(X(i))
-            pose = Pose()
-            pose.position.x = pi.x()
-            pose.position.y = pi.y()
-            pose.orientation.z = math.sin(pi.theta() / 2.0)
-            pose.orientation.w = math.cos(pi.theta() / 2.0)
-            pa.poses.append(pose)
-        self.poses_pub.publish(pa)
-
-        # /trajectory_optimized (nav_msgs/Path): consumida por la segunda pasada de mapeo LIDAR
-        pth = Path()
-        pth.header = bel.header
-        for i in range(self.pose_count):
-            pi = self.result.atPose2(X(i))
-            ps = PoseStamped()
-            ps.header = bel.header
-            ps.pose.position.x = pi.x()
-            ps.pose.position.y = pi.y()
-            ps.pose.orientation.z = math.sin(pi.theta() / 2.0)
-            ps.pose.orientation.w = math.cos(pi.theta() / 2.0)
-            pth.poses.append(ps)
-        self.path_pub.publish(pth)
-
-        # /landmarks_opt
-        ma = MarkerArray()
+        landmarks = []
         for lm_id in self.seen_landmarks:
-            pt = self.result.atPoint2(L(lm_id))
-            m = Marker()
-            m.header = bel.header
-            m.ns = 'aruco_opt'
-            m.id = lm_id
-            m.type = Marker.SPHERE
-            m.scale.x = m.scale.y = m.scale.z = 0.15
-            m.color.g = 1.0
-            m.color.a = 0.9
-            m.pose.position.x = pt[0]
-            m.pose.position.y = pt[1]
-            m.pose.orientation.w = 1.0
-            ma.markers.append(m)
-        self.lm_pub.publish(ma)
+            try:
+                landmarks.append((lm_id, self.result.atPoint2(L(lm_id))))
+            except Exception:
+                pass
+        self.lm_pub.publish(build_landmark_markers(self.map_frame, now, landmarks))
 
         # TF map->odom
         tf_stamp = self.last_odom_stamp if self.last_odom_stamp is not None else now
@@ -506,16 +450,14 @@ class GraphSlamNode(Node):
         T_odom_base = Pose2(ox, oy, oth)
         T_map_odom = map_base_pose.compose(T_odom_base.inverse())
 
-        t = TransformStamped()
-        t.header.stamp = stamp  # timestamp del mensaje que desencadenó la publicación
-        t.header.frame_id = self.map_frame
-        t.child_frame_id = self.odom_frame
-        t.transform.translation.x = T_map_odom.x()
-        t.transform.translation.y = T_map_odom.y()
-        t.transform.translation.z = 0.0
-        t.transform.rotation.z = math.sin(T_map_odom.theta() / 2.0)
-        t.transform.rotation.w = math.cos(T_map_odom.theta() / 2.0)
-        self.tf_broadcaster.sendTransform(t)
+        self.tf_broadcaster.sendTransform(
+            build_map_to_odom_transform(
+                self.map_frame,
+                self.odom_frame,
+                stamp,
+                T_map_odom,
+            )
+        )
 
     # ============================================================
     #  Exportación de trayectoria y landmarks al finalizar
@@ -554,9 +496,7 @@ class GraphSlamNode(Node):
             except Exception:
                 pass
 
-        out = {'trajectory': traj, 'landmarks': lm_data}
-        with open(path, 'w') as f:
-            json.dump(out, f, indent=2)
+        write_trajectory_json(path, traj, lm_data)
         self.get_logger().info(
             f'Trayectoria guardada: {len(traj)} poses, '
             f'{len(lm_data)} landmarks → {path}')

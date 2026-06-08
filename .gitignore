@@ -1,0 +1,32 @@
+# macOS
+.DS_Store
+**/.DS_Store
+
+# ROS 2 / colcon generated folders
+**/build/
+**/install/
+**/log/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+.mypy_cache/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# ROS bags
+tp_final_ws/bags/*
+!tp_final_ws/bags/.gitkeep
+
+# Temporary/editor files
+*.swp
+*.swo
+*~
+.vscode/
+.idea/
