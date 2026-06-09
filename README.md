@@ -1,173 +1,139 @@
 # TP Final Rob - Parte A
 
-Este repo hoy esta enfocado en la **Parte A** del TP final de Robotica Autonoma:
-tomar un rosbag real del TurtleBot4, hacer **Graph SLAM con ArUco**, y despues
-proyectar el LIDAR sobre la trayectoria corregida para generar un mapa.
+Este repositorio contiene el trabajo en curso para la **Parte A** del TP final
+de Robotica Autonoma: usar un rosbag del TurtleBot4, detectar landmarks ArUco,
+construir una trayectoria corregida con Graph SLAM y proyectar el LIDAR sobre
+esa trayectoria para generar un mapa de ocupacion.
 
-La ruta real del workspace en este repo es:
+La rama actual queda como punto de continuidad. No debe considerarse una entrega
+cerrada: todavia hay bugs conocidos, especialmente en la carga/confirmacion de
+landmarks.
 
-```bash
-/Users/franco/TP-Final-Rob/tp_final_ws
-```
+## Estado de la rama
 
-## Que corre hoy
+- **Primera pasada:** deteccion ArUco + Graph SLAM para generar
+  `trayectoria.json`.
+- **Segunda pasada:** trayectoria optimizada + LIDAR para generar `mapa.pgm` y
+  `mapa.yaml`.
+- **Visualizacion:** `parte_a_slam.launch.py` puede levantar RViz como parte del
+  pipeline.
+- **Pendiente principal:** revisar por que los landmarks no terminan entrando al
+  grafo de forma confiable.
 
-- **1ra pasada:** deteccion ArUco + Graph SLAM -> `trajectory.json`
-- **2da pasada:** trayectoria fija + LIDAR -> `mapa.pgm` y `mapa.yaml`
-- **RViz:** se abre automaticamente desde `parte_a_slam.launch.py`
+Para mas contexto de continuidad, ver [docs/parte_a_handoff.md](docs/parte_a_handoff.md).
 
-## Estructura minima
+## Estructura relevante
 
 ```text
 tp_final_ws/
 ├── bags/
-│   ├── aruco_estimation/
-│   └── laberinto/
-└── src/tp_slam_aruco/
-    ├── config/
-    ├── launch/
-    └── tp_slam_aruco/
+├── src/
+│   ├── tp_slam_interfaces/
+│   │   └── msg/
+│   └── tp_slam_aruco/
+│       ├── config/
+│       ├── launch/
+│       ├── test/
+│       └── tp_slam_aruco/
 ```
+
+`tp_slam_interfaces` define los mensajes internos usados para pasar
+observaciones visuales del detector ArUco al nodo de SLAM. `tp_slam_aruco`
+contiene los nodos, launch files, configuracion y tests.
 
 ## Requisitos
 
-Asumo que ya tenes ROS 2 funcionando en tu maquina y que `cv_bridge` viene de tu
-instalacion de ROS.
+Se asume una instalacion funcional de ROS 2 con `cv_bridge` disponible.
 
-Dependencias Python usadas por este paquete:
+Dependencias Python usadas por el paquete:
 
 ```bash
 pip install "numpy<2" gtsam pyyaml opencv-contrib-python
 python -c "import cv_bridge, cv2, gtsam, numpy; print(numpy.__version__)"
 ```
 
-Si `cv_bridge` rompe con `_ARRAY_API not found`, casi seguro estas con NumPy 2.x.
-
 ## Build
 
+Desde la raiz del repositorio:
+
 ```bash
-cd /Users/franco/TP-Final-Rob/tp_final_ws
-colcon build --packages-select tp_slam_aruco
+cd tp_final_ws
+colcon build --packages-select tp_slam_interfaces tp_slam_aruco
 source install/setup.bash
 ```
 
-## Parte A - 1ra pasada
+## Parte A - Primera pasada
 
 Terminal 1:
 
 ```bash
-cd /Users/franco/TP-Final-Rob/tp_final_ws
+cd tp_final_ws
 source install/setup.bash
-ros2 bag play /Users/franco/TP-Final-Rob/tp_final_ws/bags/laberinto --clock
+ros2 bag play <ruta_al_bag> --clock
 ```
 
 Terminal 2:
 
 ```bash
-cd /Users/franco/TP-Final-Rob/tp_final_ws
+cd tp_final_ws
 source install/setup.bash
 ros2 launch tp_slam_aruco parte_a_slam.launch.py \
-  calibration_file:=/Users/franco/TP-Final-Rob/tp_final_ws/src/tp_slam_aruco/config/camera_tb4_0.yaml \
-  trajectory_file:=/tmp/trayectoria.json \
+  calibration_file:=<ruta_al_yaml_de_calibracion> \
+  trajectory_file:=<ruta_salida>/trayectoria.json \
   use_bag_tf:=true
 ```
 
-Que deberias ver:
+Salida esperada al cortar el launch con `Ctrl+C`:
 
+```text
+<ruta_salida>/trayectoria.json
+```
+
+Topicos importantes para mirar durante esta pasada:
+
+- `/landmark_observations`
+- `/landmark_detection_stats`
 - `/belief`
 - `/poses_guardadas`
 - `/landmarks_opt`
 - `/trajectory_optimized`
-- TF `map -> odom`
-- RViz abriendose solo, ya sincronizado con `/clock`
-- La imagen de la camara en el panel inferior izquierdo
 
-Cuando frenes el launch con `Ctrl+C`, se guarda:
-
-```bash
-/tmp/trayectoria.json
-```
-
-## RViz manual (opcional)
-
-Normalmente no hace falta porque `parte_a_slam.launch.py` ya lo abre.
-Si queres levantarlo aparte, usa reloj simulado explicitamente:
-
-```bash
-cd /Users/franco/TP-Final-Rob/tp_final_ws
-source install/setup.bash
-ros2 run rviz2 rviz2 \
-  --ros-args -p use_sim_time:=true \
-  -d /Users/franco/TP-Final-Rob/tp_final_ws/src/tp_slam_aruco/config/rviz_config.rviz
-```
-
-## Parte A - 2da pasada
+## Parte A - Segunda pasada
 
 Terminal 1:
 
 ```bash
-cd /Users/franco/TP-Final-Rob/tp_final_ws
+cd tp_final_ws
 source install/setup.bash
-ros2 bag play /Users/franco/TP-Final-Rob/tp_final_ws/bags/laberinto --clock
+ros2 bag play <ruta_al_bag> --clock
 ```
 
 Terminal 2:
 
 ```bash
-cd /Users/franco/TP-Final-Rob/tp_final_ws
+cd tp_final_ws
 source install/setup.bash
 ros2 launch tp_slam_aruco parte_a_mapa.launch.py \
-  trajectory_file:=/tmp/trayectoria.json \
-  map_output:=/tmp/mapa
+  trajectory_file:=<ruta_salida>/trayectoria.json \
+  map_output:=<ruta_salida>/mapa
 ```
 
 Salida esperada al cortar con `Ctrl+C`:
 
-```bash
-/tmp/mapa.pgm
-/tmp/mapa.yaml
+```text
+<ruta_salida>/mapa.pgm
+<ruta_salida>/mapa.yaml
 ```
 
-## Troubleshooting corto
+## Handoff
 
-### No anda TF o RViz queda vacio
+Quien continue esta rama deberia empezar por validar el flujo de landmarks antes
+de ajustar el mapeo LIDAR. En particular:
 
-Verifica estas dos cosas primero:
-
-```bash
-ros2 bag play /Users/franco/TP-Final-Rob/tp_final_ws/bags/laberinto --clock
-ros2 run tf2_ros tf2_echo base_link oakd_rgb_camera_optical_frame
-```
-
-La 1ra pasada ahora levanta un **TF bridge** para republicar el TF del bag
-(``/tb4_0/tf`` y ``/tb4_0/tf_static``) en los topicos estandar (`/tf`,
-`/tf_static`).
-
-### La geometria sigue mal
-
-- Deja `use_bag_tf:=true`
-- Los extrinsecos numericos quedaron solo como fallback
-- El fallback actual del TB4 grabado en este bag es:
-
-```bash
-camera_tx:=-0.0596 camera_ty:=0.0 camera_yaw:=0.0
-```
-
-### No aparece `trajectory.json`
-
-- Asegurate de cortar el launch con `Ctrl+C`
-- Usa una ruta escribible, por ejemplo `/tmp/trayectoria.json`
-
-### `cv_bridge` rompe al arrancar
-
-```bash
-pip install "numpy<2"
-python -c "import cv_bridge; print('cv_bridge ok')"
-```
-
-## Alcance actual
-
-Este repo esta preparado para correr y depurar **Parte A**.
-
-- **Parte B** y **Parte C** siguen siendo contexto del TP, pero no estan
-  empaquetadas aca como flujos end-to-end con el mismo nivel de soporte.
+- Confirmar que el detector publica observaciones en `/landmark_observations`.
+- Confirmar que `graph_slam_node` recibe esas observaciones y las convierte en
+  candidatos.
+- Revisar los filtros de edad, parallax y reproyeccion antes de relajar o
+  endurecer parametros.
+- Verificar que `camera_info` y el TF camara -> `base_link` esten disponibles
+  durante la reproduccion del bag.

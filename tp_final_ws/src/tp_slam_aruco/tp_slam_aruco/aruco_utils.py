@@ -97,6 +97,7 @@ def estimate_marker_poses(corners, ids, marker_length,
                 'id': int(marker_id),
                 'rvec': rvec.flatten(),
                 'tvec': tvec.flatten(),
+                'image_points': image_points,
             })
     return detections
 

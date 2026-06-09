@@ -1,9 +1,17 @@
 import math
+from collections import deque
 from dataclasses import dataclass
 
 
 @dataclass(frozen=True)
 class CameraExtrinsics:
+    tx: float
+    ty: float
+    yaw: float
+
+
+@dataclass(frozen=True)
+class PlanarTransform2D:
     tx: float
     ty: float
     yaw: float
@@ -53,3 +61,88 @@ def transform_stamped_to_base_xy(transform, point):
         ),
         point=point,
     )
+
+
+def quaternion_to_yaw(rotation):
+    qx, qy, qz, qw = rotation
+    siny_cosp = 2.0 * (qw * qz + qx * qy)
+    cosy_cosp = 1.0 - 2.0 * (qy * qy + qz * qz)
+    return math.atan2(siny_cosp, cosy_cosp)
+
+
+def planar_transform_from_xyz_quat(translation, rotation):
+    return PlanarTransform2D(
+        tx=float(translation[0]),
+        ty=float(translation[1]),
+        yaw=float(quaternion_to_yaw(rotation)),
+    )
+
+
+def invert_planar_transform(transform):
+    cy = math.cos(transform.yaw)
+    sy = math.sin(transform.yaw)
+    tx = -(cy * transform.tx + sy * transform.ty)
+    ty = -(-sy * transform.tx + cy * transform.ty)
+    return PlanarTransform2D(tx=tx, ty=ty, yaw=-transform.yaw)
+
+
+def compose_planar_transforms(first, second):
+    cy = math.cos(first.yaw)
+    sy = math.sin(first.yaw)
+    tx = first.tx + cy * second.tx - sy * second.ty
+    ty = first.ty + sy * second.tx + cy * second.ty
+    return PlanarTransform2D(
+        tx=tx,
+        ty=ty,
+        yaw=math.atan2(
+            math.sin(first.yaw + second.yaw),
+            math.cos(first.yaw + second.yaw),
+        ),
+    )
+
+
+def lookup_planar_transform(graph, source_frame, target_frame):
+    if source_frame == target_frame:
+        return PlanarTransform2D(tx=0.0, ty=0.0, yaw=0.0)
+
+    neighbors = {}
+    for (parent, child), transform in graph.items():
+        neighbors.setdefault(parent, []).append((child, transform))
+        neighbors.setdefault(child, []).append((parent, invert_planar_transform(transform)))
+
+    queue = deque([(source_frame, PlanarTransform2D(tx=0.0, ty=0.0, yaw=0.0))])
+    visited = {source_frame}
+
+    while queue:
+        frame, accumulated = queue.popleft()
+        for next_frame, edge in neighbors.get(frame, []):
+            if next_frame in visited:
+                continue
+            composed = compose_planar_transforms(accumulated, edge)
+            if next_frame == target_frame:
+                return composed
+            visited.add(next_frame)
+            queue.append((next_frame, composed))
+
+    raise KeyError(f'No planar transform chain from {source_frame} to {target_frame}')
+
+
+def planar_graph_from_transforms(transforms):
+    graph = {}
+    for transform in transforms:
+        graph[(transform.header.frame_id, transform.child_frame_id)] = (
+            planar_transform_from_xyz_quat(
+                translation=(
+                    transform.transform.translation.x,
+                    transform.transform.translation.y,
+                    transform.transform.translation.z,
+                ),
+                rotation=(
+                    transform.transform.rotation.x,
+                    transform.transform.rotation.y,
+                    transform.transform.rotation.z,
+                    transform.transform.rotation.w,
+                ),
+            )
+        )
+    return graph

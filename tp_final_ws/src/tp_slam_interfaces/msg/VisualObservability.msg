@@ -1,0 +1,15 @@
+std_msgs/Header header
+int32 raw_count
+int32 valid_count
+int32 valid_unique_count
+int32 rejected_area
+int32 rejected_depth
+int32 rejected_reprojection
+int32 rejected_tf
+int32 rejected_no_calibration
+int32[] raw_ids
+int32[] valid_ids
+int32[] rejected_area_ids
+int32[] rejected_depth_ids
+int32[] rejected_reprojection_ids
+int32[] rejected_tf_ids

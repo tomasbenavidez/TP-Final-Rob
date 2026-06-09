@@ -69,7 +69,7 @@ Visualization Manager:
       Max Intensity: 4096
       Min Color: 0; 0; 0
       Min Intensity: 0
-      Name: LaserScan
+      Name: LaserScan Instantaneo
       Position Transformer: ""
       Selectable: true
       Size (Pixels): 3
@@ -136,7 +136,7 @@ Visualization Manager:
       Length: 0.10000000149011612
       Line Style: Lines
       Line Width: 0.05000000074505806
-      Name: Trajectory
+      Name: Trajectory Optimized
       Offset:
         X: 0
         Y: 0
@@ -156,7 +156,31 @@ Visualization Manager:
       Value: true
     - Class: rviz_default_plugins/MarkerArray
       Enabled: true
-      Name: Landmarks
+      Name: Landmarks Raw (detectados)
+      Namespaces:
+        aruco_raw: true
+      Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /landmarks_raw
+      Value: true
+    - Class: rviz_default_plugins/MarkerArray
+      Enabled: false
+      Name: Landmarks Aceptados
+      Namespaces:
+        aruco_accepted: true
+      Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /landmarks_accepted
+      Value: true
+    - Class: rviz_default_plugins/MarkerArray
+      Enabled: true
+      Name: Landmarks Optimizados
       Namespaces:
         aruco_opt: true
       Topic:
