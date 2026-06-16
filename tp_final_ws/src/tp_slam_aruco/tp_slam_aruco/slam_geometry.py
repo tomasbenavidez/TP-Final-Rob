@@ -55,6 +55,33 @@ def transform_stamped_to_base_xy(transform, point):
     )
 
 
+def _wrap_angle(a):
+    return math.atan2(math.sin(a), math.cos(a))
+
+
+def se2_inverse(pose):
+    """Inversa de una pose SE(2) (x, y, theta)."""
+    x, y, th = pose
+    c, s = math.cos(th), math.sin(th)
+    return (-(c * x + s * y), -(-s * x + c * y), -th)
+
+
+def se2_compose(a, b):
+    """Composición SE(2): devuelve a ∘ b (aplicar b en el frame de a)."""
+    ax, ay, ath = a
+    c, s = math.cos(ath), math.sin(ath)
+    bx, by, bth = b
+    return (ax + c * bx - s * by, ay + s * bx + c * by, _wrap_angle(ath + bth))
+
+
+def se2_interpolate(a, b, alpha):
+    """Interpola dos poses SE(2): traslación lineal, ángulo por camino corto."""
+    ax, ay, ath = a
+    bx, by, bth = b
+    dth = _wrap_angle(bth - ath)
+    return (ax + alpha * (bx - ax), ay + alpha * (by - ay), _wrap_angle(ath + alpha * dth))
+
+
 def predict_landmark_from_observation(pose_x, pose_y, pose_theta, x_base, y_base):
     cy = math.cos(pose_theta)
     sy = math.sin(pose_theta)

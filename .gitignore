@@ -30,3 +30,7 @@ tp_final_ws/bags/*
 *~
 .vscode/
 .idea/
+cheatsheet.md
+resources/
+tp_final_ws/logs_runs/trayectoria.json
+logs_runs/ 
