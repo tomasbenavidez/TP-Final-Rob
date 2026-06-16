@@ -53,3 +53,15 @@ def transform_stamped_to_base_xy(transform, point):
         ),
         point=point,
     )
+
+
+def predict_landmark_from_observation(pose_x, pose_y, pose_theta, x_base, y_base):
+    cy = math.cos(pose_theta)
+    sy = math.sin(pose_theta)
+    pred_x = pose_x + cy * x_base - sy * y_base
+    pred_y = pose_y + sy * x_base + cy * y_base
+    return pred_x, pred_y
+
+
+def spatial_landmark_jump(pred_x, pred_y, landmark_x, landmark_y):
+    return math.hypot(float(pred_x) - float(landmark_x), float(pred_y) - float(landmark_y))

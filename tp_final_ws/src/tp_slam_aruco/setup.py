@@ -39,6 +39,7 @@ setup(
             'graph_slam = tp_slam_aruco.graph_slam_node:main',
             'occupancy_grid = tp_slam_aruco.occupancy_grid_node:main',
             'tf_bridge = tp_slam_aruco.tf_bridge_node:main',
+            'check_bag_contract = tp_slam_aruco.check_bag_contract:main',
         ],
     },
 )
