@@ -24,6 +24,7 @@ en el tablero; este archivo arranca con la detección base sólida (F2-A).
 """
 
 import numpy as np
+import csv
 
 import rclpy
 from rclpy.node import Node
@@ -36,6 +37,10 @@ from cv_bridge import CvBridge
 import cv2
 
 from tp_slam_aruco.aruco_utils import load_camera_calibration, estimate_marker_poses
+from tp_slam_aruco.aruco_filtering import (
+    detection_rejection_reason,
+    parse_allowed_marker_ids,
+)
 
 
 class ArucoDetectorNode(Node):
@@ -49,12 +54,39 @@ class ArucoDetectorNode(Node):
         self.declare_parameter('aruco_dict', 'DICT_4X4_50')
         # frame_id del frame de la cámara; si está vacío se usa el del mensaje.
         self.declare_parameter('camera_frame', '')
+        self.declare_parameter('detections_topic', '/aruco_detections')
+        self.declare_parameter('debug_image_topic', '/aruco/debug_image')
+        self.declare_parameter('publish_debug_image', True)
+        self.declare_parameter('log_every_detections', 30)
+        self.declare_parameter('min_marker_area_px', 250.0)
+        self.declare_parameter('min_marker_depth', 0.15)
+        self.declare_parameter('max_marker_depth', 3.0)
+        self.declare_parameter('max_reprojection_error_px', 4.0)
+        self.declare_parameter('allowed_marker_ids', '')
+        self.declare_parameter('diagnostics_file', '/tmp/aruco_detections.csv')
 
         image_topic = self.get_parameter('image_topic').value
         calib_file = self.get_parameter('calibration_file').value
         self.marker_length = self.get_parameter('marker_length').value
         dict_name = self.get_parameter('aruco_dict').value
         self.camera_frame = self.get_parameter('camera_frame').value
+        detections_topic = self.get_parameter('detections_topic').value
+        debug_image_topic = self.get_parameter('debug_image_topic').value
+        self.publish_debug_image = bool(self.get_parameter('publish_debug_image').value)
+        self.log_every_detections = int(self.get_parameter('log_every_detections').value)
+        self.min_marker_area_px = float(self.get_parameter('min_marker_area_px').value)
+        self.min_marker_depth = float(self.get_parameter('min_marker_depth').value)
+        self.max_marker_depth = float(self.get_parameter('max_marker_depth').value)
+        self.max_reprojection_error_px = float(
+            self.get_parameter('max_reprojection_error_px').value
+        )
+        self.allowed_marker_ids = parse_allowed_marker_ids(
+            self.get_parameter('allowed_marker_ids').value
+        )
+        self.diagnostics_file = self.get_parameter('diagnostics_file').value
+        self._diag_handle = None
+        self._diag_writer = None
+        self._detection_frame_count = 0
 
         # Calibración de la cámara: se obtiene del tópico camera_info (fuente
         # canónica y siempre consistente con el bag). El YAML es fallback por
@@ -108,16 +140,25 @@ class ArucoDetectorNode(Node):
 
         self.bridge = CvBridge()
 
-        # Suscripción a la imagen y publicador de markers para visualizar
-        # las detecciones en RViz (tópico /landmarks del enunciado).
+        # Publicamos detecciones crudas en frame cámara/base. Los landmarks
+        # estimados en mapa los publica graph_slam_node en /landmarks.
         self.sub = self.create_subscription(
             Image, image_topic, self.image_callback, qos_profile_sensor_data
         )
-        self.marker_pub = self.create_publisher(MarkerArray, '/landmarks', 10)
+        self.marker_pub = self.create_publisher(MarkerArray, detections_topic, 10)
+        self.debug_image_pub = (
+            self.create_publisher(Image, debug_image_topic, qos_profile_sensor_data)
+            if self.publish_debug_image else None
+        )
 
         self.get_logger().info(
             f'aruco_detector_node escuchando imágenes en "{image_topic}". '
-            f'Diccionario={dict_name}, lado={self.marker_length} m.'
+            f'Diccionario={dict_name}, lado={self.marker_length} m, '
+            f'detecciones={detections_topic}, debug_image={debug_image_topic}, '
+            f'filtros: area>={self.min_marker_area_px:.0f}px, '
+            f'depth=({self.min_marker_depth:.2f},{self.max_marker_depth:.2f}]m, '
+            f'reproj<={self.max_reprojection_error_px:.1f}px, '
+            f'ids={sorted(self.allowed_marker_ids) if self.allowed_marker_ids else "todos"}.'
         )
 
     def _camera_info_cb(self, msg: CameraInfo):
@@ -162,29 +203,141 @@ class ArucoDetectorNode(Node):
         corners, ids, _rejected = self._detect_markers(gray)
 
         if ids is None or len(ids) == 0:
+            self._publish_debug_image(frame, corners, ids, msg.header)
             return  # ningún marcador en este frame
 
         # Estimación de pose 3D de cada marcador (requiere calibración).
         detections = []
+        accepted = []
         if self.camera_matrix is not None:
             detections = estimate_marker_poses(
                 corners, ids, self.marker_length,
                 self.camera_matrix, self.dist_coeffs
             )
-            for det in detections:
-                # tvec = (x, y, z) del marcador en el frame de la cámara.
-                # z es la profundidad (distancia hacia adelante).
-                self.get_logger().info(
-                    f'ArUco id={det["id"]}  '
-                    f'pos_cam=({det["tvec"][0]:+.2f}, '
-                    f'{det["tvec"][1]:+.2f}, {det["tvec"][2]:+.2f}) m'
-                )
+            accepted = self._filter_detections(detections, msg.header)
+            self._log_detection_summary(accepted)
         else:
             ids_list = [int(i) for i in ids.flatten()]
-            self.get_logger().info(f'Detectados IDs (sin pose 3D): {ids_list}')
+            self._log_detection_summary([
+                {'id': marker_id, 'tvec': None}
+                for marker_id in ids_list
+            ])
+            self._write_no_pose_diagnostics(ids_list, msg.header)
 
         # Publicamos los markers para RViz.
-        self._publish_markers(detections, msg.header)
+        self._publish_markers(accepted, msg.header)
+        self._publish_debug_image(frame, corners, ids, msg.header)
+
+    def _filter_detections(self, detections, header):
+        accepted = []
+        for det in detections:
+            reason = detection_rejection_reason(
+                det,
+                min_area_px=self.min_marker_area_px,
+                min_depth=self.min_marker_depth,
+                max_depth=self.max_marker_depth,
+                max_reprojection_error_px=self.max_reprojection_error_px,
+                allowed_marker_ids=self.allowed_marker_ids,
+            )
+            self._write_detection_diagnostic(det, header, reason)
+            if reason is None:
+                accepted.append(det)
+        return accepted
+
+    def _log_detection_summary(self, detections):
+        self._detection_frame_count += 1
+        if self.log_every_detections <= 0:
+            return
+        if self._detection_frame_count % self.log_every_detections != 0:
+            return
+
+        parts = []
+        for det in detections:
+            if det.get('tvec') is None:
+                parts.append(f'id={det["id"]}: sin pose')
+            else:
+                tvec = det['tvec']
+                parts.append(
+                    f'id={det["id"]}: cam=({tvec[0]:+.2f},{tvec[1]:+.2f},{tvec[2]:+.2f})m '
+                    f'area={det.get("area_px", 0.0):.0f}px '
+                    f'reproj={det.get("reprojection_error_px", 0.0):.2f}px'
+                )
+        self.get_logger().info('ArUco detectados: ' + '; '.join(parts))
+
+    def _ensure_diagnostics_writer(self):
+        if not self.diagnostics_file:
+            return None
+        if self._diag_writer is None:
+            self._diag_handle = open(self.diagnostics_file, 'w', newline='')
+            self._diag_writer = csv.DictWriter(
+                self._diag_handle,
+                fieldnames=[
+                    'stamp',
+                    'frame_id',
+                    'id',
+                    'accepted',
+                    'reason',
+                    'tx',
+                    'ty',
+                    'tz',
+                    'distance',
+                    'area_px',
+                    'reprojection_error_px',
+                ],
+            )
+            self._diag_writer.writeheader()
+            self._diag_handle.flush()
+            self.get_logger().info(f'Diagnóstico ArUco escribiendo en {self.diagnostics_file}')
+        return self._diag_writer
+
+    def _write_detection_diagnostic(self, det, header, reason):
+        writer = self._ensure_diagnostics_writer()
+        if writer is None:
+            return
+        tvec = det.get('tvec')
+        stamp = header.stamp.sec + header.stamp.nanosec * 1e-9
+        distance = float(np.linalg.norm(tvec)) if tvec is not None else ''
+        writer.writerow({
+            'stamp': f'{stamp:.9f}',
+            'frame_id': header.frame_id,
+            'id': int(det['id']),
+            'accepted': int(reason is None),
+            'reason': reason or '',
+            'tx': f'{float(tvec[0]):.6f}' if tvec is not None else '',
+            'ty': f'{float(tvec[1]):.6f}' if tvec is not None else '',
+            'tz': f'{float(tvec[2]):.6f}' if tvec is not None else '',
+            'distance': f'{distance:.6f}' if tvec is not None else '',
+            'area_px': f'{float(det.get("area_px", 0.0)):.3f}',
+            'reprojection_error_px': f'{float(det.get("reprojection_error_px", 0.0)):.3f}',
+        })
+        self._diag_handle.flush()
+
+    def _write_no_pose_diagnostics(self, ids_list, header):
+        for marker_id in ids_list:
+            self._write_detection_diagnostic(
+                {'id': marker_id, 'tvec': None, 'area_px': 0.0, 'reprojection_error_px': 0.0},
+                header,
+                'missing_calibration',
+            )
+
+    def close_diagnostics(self):
+        if self._diag_handle is not None:
+            self._diag_handle.close()
+            self._diag_handle = None
+            self._diag_writer = None
+
+    def _publish_debug_image(self, frame, corners, ids, header):
+        if self.debug_image_pub is None:
+            return
+        debug = frame.copy()
+        if ids is not None and len(ids) > 0:
+            cv2.aruco.drawDetectedMarkers(debug, corners, ids)
+        try:
+            msg = self.bridge.cv2_to_imgmsg(debug, encoding='bgr8')
+            msg.header = header
+            self.debug_image_pub.publish(msg)
+        except Exception as e:
+            self.get_logger().warn(f'No se pudo publicar imagen debug ArUco: {e}')
 
     def _publish_markers(self, detections, header):
         """Convierte las detecciones en MarkerArray para visualizar en RViz."""
@@ -262,8 +415,13 @@ def main(args=None):
     except KeyboardInterrupt:
         pass
     finally:
-        node.destroy_node()
-        rclpy.shutdown()
+        node.close_diagnostics()
+        try:
+            node.destroy_node()
+        except KeyboardInterrupt:
+            pass
+        if rclpy.ok():
+            rclpy.shutdown()
 
 
 if __name__ == '__main__':

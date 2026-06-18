@@ -3,6 +3,10 @@ import math
 import numpy as np
 
 from tp_slam_aruco.motion_model import normalize_angle
+from tp_slam_aruco.slam_geometry import (
+    predict_landmark_from_observation,
+    spatial_landmark_jump,
+)
 
 
 def observation_sigmas(range_):
@@ -91,3 +95,35 @@ def innovation_gate_from_values(
         range_=range_,
         maha_threshold=maha_threshold,
     )
+
+
+def spatial_landmark_gate_from_values(
+    result,
+    initial,
+    pose_key,
+    landmark_key,
+    x_base,
+    y_base,
+    max_jump,
+):
+    state = resolve_gate_state(
+        result=result,
+        initial=initial,
+        pose_key=pose_key,
+        landmark_key=landmark_key,
+    )
+    if state is None:
+        return True, None, None, None, None, None
+
+    pose, landmark = state
+    pred_x, pred_y = predict_landmark_from_observation(
+        pose_x=pose.x(),
+        pose_y=pose.y(),
+        pose_theta=pose.theta(),
+        x_base=x_base,
+        y_base=y_base,
+    )
+    landmark_x = float(landmark[0])
+    landmark_y = float(landmark[1])
+    jump = spatial_landmark_jump(pred_x, pred_y, landmark_x, landmark_y)
+    return jump <= max_jump, pred_x, pred_y, jump, landmark_x, landmark_y

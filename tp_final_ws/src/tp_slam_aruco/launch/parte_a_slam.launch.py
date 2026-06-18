@@ -30,6 +30,7 @@ from launch.conditions import IfCondition
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 from launch_ros.actions import SetParameter
+from launch_ros.parameter_descriptions import ParameterValue
 
 
 def generate_launch_description():
@@ -121,6 +122,36 @@ def generate_launch_description():
         default_value=rviz_default_config,
         description='Ruta al archivo .rviz para la visualizacion de Parte A.',
     )
+    min_marker_area_px_arg = DeclareLaunchArgument(
+        'min_marker_area_px',
+        default_value='250.0',
+        description='Area minima del marcador detectado en pixeles.',
+    )
+    max_marker_depth_arg = DeclareLaunchArgument(
+        'max_marker_depth',
+        default_value='3.0',
+        description='Profundidad maxima aceptada para ArUco en metros.',
+    )
+    max_reprojection_error_px_arg = DeclareLaunchArgument(
+        'max_reprojection_error_px',
+        default_value='4.0',
+        description='Error maximo de reproyeccion para aceptar una pose ArUco.',
+    )
+    allowed_marker_ids_arg = DeclareLaunchArgument(
+        'allowed_marker_ids',
+        default_value='',
+        description='Whitelist opcional de IDs ArUco, separados por coma.',
+    )
+    min_landmark_observations_arg = DeclareLaunchArgument(
+        'min_landmark_observations',
+        default_value='3',
+        description='Cantidad de keyframes donde debe aparecer un ID nuevo.',
+    )
+    max_landmark_position_jump_arg = DeclareLaunchArgument(
+        'max_landmark_position_jump',
+        default_value='0.75',
+        description='Salto maximo en metros para aceptar una reobservacion ArUco.',
+    )
 
     calibration_file = LaunchConfiguration('calibration_file')
     camera_frame = LaunchConfiguration('camera_frame')
@@ -138,6 +169,12 @@ def generate_launch_description():
     use_sim_time = LaunchConfiguration('use_sim_time')
     launch_rviz = LaunchConfiguration('launch_rviz')
     rviz_config = LaunchConfiguration('rviz_config')
+    min_marker_area_px = LaunchConfiguration('min_marker_area_px')
+    max_marker_depth = LaunchConfiguration('max_marker_depth')
+    max_reprojection_error_px = LaunchConfiguration('max_reprojection_error_px')
+    allowed_marker_ids = LaunchConfiguration('allowed_marker_ids')
+    min_landmark_observations = LaunchConfiguration('min_landmark_observations')
+    max_landmark_position_jump = LaunchConfiguration('max_landmark_position_jump')
 
     tf_bridge_node = Node(
         package='tp_slam_aruco',
@@ -164,6 +201,17 @@ def generate_launch_description():
             'marker_length': 0.0889,
             'aruco_dict': 'DICT_4X4_50',
             'camera_frame': camera_frame,
+            'detections_topic': '/aruco_detections',
+            'debug_image_topic': '/aruco/debug_image',
+            'publish_debug_image': True,
+            'min_marker_area_px': ParameterValue(min_marker_area_px, value_type=float),
+            'min_marker_depth': 0.15,
+            'max_marker_depth': ParameterValue(max_marker_depth, value_type=float),
+            'max_reprojection_error_px': ParameterValue(
+                max_reprojection_error_px, value_type=float
+            ),
+            'allowed_marker_ids': allowed_marker_ids,
+            'diagnostics_file': '/tmp/aruco_detections.csv',
         }],
     )
 
@@ -178,10 +226,23 @@ def generate_launch_description():
             'kf_angle_max': kf_angle_max,
             'reobs_min_parallax': reobs_min_parallax,
             'optimize_every': optimize_every,
+            'landmarks_topic': '/aruco_detections',
+            'optimized_landmarks_topic': '/landmarks',
+            'legacy_landmarks_topic': '/landmarks_opt',
+            'base_debug_topic': '/aruco_base_debug',
+            'min_marker_depth': 0.15,
+            'max_marker_depth': ParameterValue(max_marker_depth, value_type=float),
+            'min_landmark_observations': ParameterValue(
+                min_landmark_observations, value_type=int
+            ),
+            'max_landmark_position_jump': ParameterValue(
+                max_landmark_position_jump, value_type=float
+            ),
             'camera_tx': camera_tx,
             'camera_ty': camera_ty,
             'camera_yaw': camera_yaw,
             'trajectory_file': trajectory_file,
+            'geometry_debug_file': '/tmp/aruco_geometry_debug.csv',
         }],
     )
 
@@ -212,6 +273,12 @@ def generate_launch_description():
         use_sim_time_arg,
         launch_rviz_arg,
         rviz_config_arg,
+        min_marker_area_px_arg,
+        max_marker_depth_arg,
+        max_reprojection_error_px_arg,
+        allowed_marker_ids_arg,
+        min_landmark_observations_arg,
+        max_landmark_position_jump_arg,
         SetParameter(name='use_sim_time', value=use_sim_time),
         tf_bridge_node,
         aruco_node,

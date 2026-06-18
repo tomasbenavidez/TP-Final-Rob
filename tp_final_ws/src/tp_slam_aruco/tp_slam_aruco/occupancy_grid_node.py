@@ -22,8 +22,6 @@ ALGORITMO (inverse sensor model + log-odds):
   Al exportar, convertir log-odds a probabilidad y umbralizar a 0/100/-1.
 """
 
-import bisect
-import json
 import math
 import os
 
@@ -33,6 +31,14 @@ from rclpy.node import Node
 from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy
 from sensor_msgs.msg import LaserScan
 from nav_msgs.msg import OccupancyGrid
+
+from tp_slam_aruco.slam_mapping import (
+    bresenham_cells,
+    interpolate_pose,
+    log_odds_to_occupancy,
+    world_to_grid,
+)
+from tp_slam_aruco.slam_io import read_trajectory_json
 
 _L_OCC  =  0.85   # evidencia de celda ocupada (≈ log(0.70/0.30))
 _L_FREE = -0.40   # evidencia de celda libre (asimétrico: más conservador al limpiar)
@@ -73,13 +79,17 @@ class OccupancyGridNode(Node):
         self.trajectory  = []
         self.traj_stamps = []
         if traj_path and os.path.exists(traj_path):
-            with open(traj_path) as f:
-                data = json.load(f)
-            self.trajectory = data['trajectory']
+            try:
+                self.trajectory, self.landmarks = read_trajectory_json(traj_path)
+            except Exception as exc:
+                self.get_logger().error(f'trajectory_file invalido: {exc}')
+                self.trajectory = []
+                self.landmarks = {}
             self.traj_stamps = [p['stamp'] for p in self.trajectory]
             self.get_logger().info(
                 f'Trayectoria cargada: {len(self.trajectory)} poses desde {traj_path}')
         else:
+            self.landmarks = {}
             self.get_logger().error(
                 f'trajectory_file no encontrado: "{traj_path}". '
                 'Ejecutar primero la 1ª pasada (parte_a_slam.launch.py).')
@@ -115,9 +125,7 @@ class OccupancyGridNode(Node):
     # ------------------------------------------------------------------ #
 
     def _world_to_grid(self, wx, wy):
-        gx = int((wx - self.origin_x) / self.resolution)
-        gy = int((wy - self.origin_y) / self.resolution)
-        return gx, gy
+        return world_to_grid(wx, wy, self.origin_x, self.origin_y, self.resolution)
 
     def _in_bounds(self, gx, gy):
         return 0 <= gx < self.width and 0 <= gy < self.height
@@ -125,57 +133,11 @@ class OccupancyGridNode(Node):
     @staticmethod
     def _bresenham(x0, y0, x1, y1):
         """Genera las celdas de la línea de (x0,y0) a (x1,y1) inclusive."""
-        cells = []
-        dx = abs(x1 - x0)
-        dy = abs(y1 - y0)
-        sx = 1 if x1 > x0 else -1
-        sy = 1 if y1 > y0 else -1
-        x, y = x0, y0
-        if dx > dy:
-            err = dx // 2
-            while x != x1:
-                cells.append((x, y))
-                err -= dy
-                if err < 0:
-                    y += sy
-                    err += dx
-                x += sx
-        else:
-            err = dy // 2
-            while y != y1:
-                cells.append((x, y))
-                err -= dx
-                if err < 0:
-                    x += sx
-                    err += dy
-                y += sy
-        cells.append((x1, y1))
-        return cells
+        return bresenham_cells(x0, y0, x1, y1)
 
     def _interpolate_pose(self, t):
         """Devuelve (x, y, theta) interpolado linealmente para el timestamp t (segundos)."""
-        if not self.traj_stamps:
-            return None
-        if t <= self.traj_stamps[0]:
-            p = self.trajectory[0]
-            return p['x'], p['y'], p['theta']
-        if t >= self.traj_stamps[-1]:
-            p = self.trajectory[-1]
-            return p['x'], p['y'], p['theta']
-
-        hi = bisect.bisect_right(self.traj_stamps, t)
-        lo = hi - 1
-        t0, t1 = self.traj_stamps[lo], self.traj_stamps[hi]
-        alpha = (t - t0) / (t1 - t0) if t1 != t0 else 0.0
-
-        p0, p1 = self.trajectory[lo], self.trajectory[hi]
-        x = p0['x'] + alpha * (p1['x'] - p0['x'])
-        y = p0['y'] + alpha * (p1['y'] - p0['y'])
-        dth = math.atan2(
-            math.sin(p1['theta'] - p0['theta']),
-            math.cos(p1['theta'] - p0['theta']))
-        theta = p0['theta'] + alpha * dth
-        return x, y, theta
+        return interpolate_pose(self.trajectory, t)
 
     # ------------------------------------------------------------------ #
     #  Integración de un barrido LIDAR                                     #
@@ -239,12 +201,7 @@ class OccupancyGridNode(Node):
     # ------------------------------------------------------------------ #
 
     def publish_map(self):
-        prob = (1.0 / (1.0 + np.exp(-self.log_odds))).astype(np.float32)
-
-        occ = np.full(self.height * self.width, -1, dtype=np.int8)
-        flat = prob.flatten()
-        occ[flat >= 0.6] = 100
-        occ[flat <= 0.4] = 0
+        occ = log_odds_to_occupancy(self.log_odds.flatten())
 
         msg = OccupancyGrid()
         msg.header.stamp = self.get_clock().now().to_msg()
@@ -256,7 +213,7 @@ class OccupancyGridNode(Node):
         msg.info.origin.position.y = float(self.origin_y)
         msg.info.origin.position.z = 0.0
         msg.info.origin.orientation.w = 1.0
-        msg.data = occ.tolist()
+        msg.data = occ
         self.map_pub.publish(msg)
 
     def export_map(self, path_prefix: str):
@@ -302,9 +259,12 @@ def main(args=None):
     except KeyboardInterrupt:
         pass
     finally:
-        node.publish_map()
         if node.map_output:
             node.export_map(node.map_output)
+        try:
+            node.publish_map()
+        except Exception as exc:
+            node.get_logger().warn(f'No se pudo publicar el mapa final durante shutdown: {exc}')
         node.destroy_node()
         rclpy.shutdown()
 

@@ -71,6 +71,27 @@ def build_landmark_markers(map_frame, stamp, landmarks):
     return marker_array
 
 
+def build_base_debug_markers(base_frame, stamp, observations):
+    marker_array = MarkerArray()
+    for observation in observations:
+        marker = Marker()
+        marker.header.frame_id = base_frame
+        marker.header.stamp = stamp
+        marker.ns = 'aruco_base_debug'
+        marker.id = int(observation['id'])
+        marker.type = Marker.SPHERE
+        marker.action = Marker.ADD
+        marker.scale.x = marker.scale.y = marker.scale.z = 0.10
+        marker.color.g = 1.0
+        marker.color.b = 1.0
+        marker.color.a = 0.9
+        marker.pose.position.x = float(observation['x_base'])
+        marker.pose.position.y = float(observation['y_base'])
+        marker.pose.orientation.w = 1.0
+        marker_array.markers.append(marker)
+    return marker_array
+
+
 def build_map_to_odom_transform(map_frame, odom_frame, stamp, pose2):
     msg = TransformStamped()
     msg.header.stamp = stamp

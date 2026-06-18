@@ -47,7 +47,8 @@ def test_parte_a_launch_smoke(tmp_path):
         'ros2 launch tp_slam_aruco parte_a_slam.launch.py '
         f'calibration_file:="{package_dir / "config" / "camera_tb4_0.yaml"}" '
         f'trajectory_file:="{trajectory_file}" '
-        'use_bag_tf:=true'
+        'use_bag_tf:=true '
+        'launch_rviz:=false'
     )
 
     bag_process = None
