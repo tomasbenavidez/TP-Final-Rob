@@ -19,6 +19,7 @@ USO:
   Ctrl+C al terminar el bag → exporta mapa.pgm + mapa.yaml
 """
 
+import math
 import os
 
 from ament_index_python.packages import get_package_share_directory
@@ -46,6 +47,12 @@ def generate_launch_description():
         default_value='0.05',
         description='Resolución de la grilla en metros/celda',
     )
+    max_angular_velocity_arg = DeclareLaunchArgument(
+        'max_angular_velocity',
+        default_value='0.0',
+        description='No integrar scans con |omega| mayor a este valor (rad/s). '
+                    '0 desactiva el gate de rotación.',
+    )
 
     occupancy_node = Node(
         package='tp_slam_aruco',
@@ -57,10 +64,14 @@ def generate_launch_description():
             'map_output':      LaunchConfiguration('map_output'),
             'resolution':      LaunchConfiguration('resolution'),
             'scan_topic':      'tb4_0/scan',
+            'odom_topic':      'tb4_0/odom',
             'publish_every':   50,
-            'lidar_tx':       -0.04,   # shell_link->rplidar_link tx (TF real del bag)
+            # Extrinsecos LIDAR del TF estatico del bag:
+            #   base_link -> shell_link (yaw 0) -> rplidar_link (tx=-0.04, yaw=+90deg)
+            'lidar_tx':       -0.04,
             'lidar_ty':        0.0,
-            'lidar_yaw':       0.0,
+            'lidar_yaw':       math.pi / 2,   # +90deg: el RPLIDAR esta rotado en base_link
+            'max_angular_velocity': LaunchConfiguration('max_angular_velocity'),
         }],
     )
 
@@ -69,5 +80,6 @@ def generate_launch_description():
         trajectory_file_arg,
         map_output_arg,
         resolution_arg,
+        max_angular_velocity_arg,
         occupancy_node,
     ])

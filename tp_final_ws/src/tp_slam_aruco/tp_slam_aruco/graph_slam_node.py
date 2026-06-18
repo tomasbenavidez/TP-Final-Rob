@@ -122,6 +122,10 @@ class GraphSlamNode(Node):
         self.last_kf_pose = None            # pose odom cruda del ultimo keyframe
         self.kf_world_pose = (0.0, 0.0, 0.0)
         self.kf_stamps: list = []           # timestamp (float s) de cada keyframe X(i)
+        # Pose de odometria CRUDA (frame odom) en cada keyframe X(i). La 2a pasada
+        # la usa para reconstruir la correccion SLAM (map<-odom) y aplicarla a la
+        # odometria densa, evitando interpolar linealmente keyframes sparse.
+        self.kf_odom_poses: list = []
 
         self.last_odom_stamp = None
         self._warned_camera_tf_fallback = False
@@ -240,6 +244,7 @@ class GraphSlamNode(Node):
         self.kf_world_pose = (0.0, 0.0, 0.0)
         s = self.last_odom_stamp
         self.kf_stamps.append(s.sec + s.nanosec * 1e-9 if s else 0.0)
+        self.kf_odom_poses.append(tuple(self.last_kf_pose))
         self.get_logger().info('Grafo inicializado: prior en X(0)=origen')
 
     def _add_keyframe(self, prev_odom_pose, curr_odom_pose):
@@ -260,6 +265,7 @@ class GraphSlamNode(Node):
         self.pose_count += 1
         s = self.last_odom_stamp
         self.kf_stamps.append(s.sec + s.nanosec * 1e-9 if s else 0.0)
+        self.kf_odom_poses.append(tuple(curr_odom_pose))
 
         current_pose = self.initial.atPose2(X(i))
         self.kf_world_pose = (current_pose.x(), current_pose.y(), current_pose.theta())
@@ -370,7 +376,7 @@ class GraphSlamNode(Node):
         )
         return x_base, y_base, 'fallback'
 
-    MAX_OBS_PER_LANDMARK = 20
+    MAX_OBS_PER_LANDMARK = 50
 
     def _innovation_gate(self, pose_index, lm_id, bearing, range_):
         """Filtra re-observaciones por distancia de Mahalanobis.
@@ -709,10 +715,14 @@ class GraphSlamNode(Node):
         for i in range(self.pose_count):
             try:
                 p = values.atPose2(X(i))
-                traj.append({
+                entry = {
                     'i': i, 'x': p.x(), 'y': p.y(), 'theta': p.theta(),
                     'stamp': self.kf_stamps[i] if i < len(self.kf_stamps) else 0.0,
-                })
+                }
+                if i < len(self.kf_odom_poses):
+                    ox, oy, oth = self.kf_odom_poses[i]
+                    entry['odom'] = {'x': ox, 'y': oy, 'theta': oth}
+                traj.append(entry)
             except Exception:
                 pass
 

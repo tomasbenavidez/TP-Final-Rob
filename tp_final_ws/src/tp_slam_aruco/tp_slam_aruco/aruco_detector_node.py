@@ -32,9 +32,9 @@ from sensor_msgs.msg import Image, CameraInfo
 from visualization_msgs.msg import Marker, MarkerArray
 from geometry_msgs.msg import Point
 
-# cv_bridge convierte mensajes Image de ROS <-> arrays de OpenCV
 from cv_bridge import CvBridge
 import cv2
+from scipy.spatial.transform import Rotation
 
 from tp_slam_aruco.aruco_utils import load_camera_calibration, estimate_marker_poses
 from tp_slam_aruco.aruco_filtering import (
@@ -379,32 +379,8 @@ class ArucoDetectorNode(Node):
     def _rvec_to_quaternion(rvec):
         """Convierte un vector de Rodrigues a quaternion (x, y, z, w)."""
         R, _ = cv2.Rodrigues(np.array(rvec, dtype=np.float64))
-        trace = R[0, 0] + R[1, 1] + R[2, 2]
-        if trace > 0.0:
-            s = 0.5 / np.sqrt(trace + 1.0)
-            w = 0.25 / s
-            x = (R[2, 1] - R[1, 2]) * s
-            y = (R[0, 2] - R[2, 0]) * s
-            z = (R[1, 0] - R[0, 1]) * s
-        elif R[0, 0] > R[1, 1] and R[0, 0] > R[2, 2]:
-            s = 2.0 * np.sqrt(1.0 + R[0, 0] - R[1, 1] - R[2, 2])
-            w = (R[2, 1] - R[1, 2]) / s
-            x = 0.25 * s
-            y = (R[0, 1] + R[1, 0]) / s
-            z = (R[0, 2] + R[2, 0]) / s
-        elif R[1, 1] > R[2, 2]:
-            s = 2.0 * np.sqrt(1.0 + R[1, 1] - R[0, 0] - R[2, 2])
-            w = (R[0, 2] - R[2, 0]) / s
-            x = (R[0, 1] + R[1, 0]) / s
-            y = 0.25 * s
-            z = (R[1, 2] + R[2, 1]) / s
-        else:
-            s = 2.0 * np.sqrt(1.0 + R[2, 2] - R[0, 0] - R[1, 1])
-            w = (R[1, 0] - R[0, 1]) / s
-            x = (R[0, 2] + R[2, 0]) / s
-            y = (R[1, 2] + R[2, 1]) / s
-            z = 0.25 * s
-        return x, y, z, w
+        q = Rotation.from_matrix(R).as_quat()  # (x, y, z, w)
+        return float(q[0]), float(q[1]), float(q[2]), float(q[3])
 
 
 def main(args=None):

@@ -45,13 +45,23 @@ def read_trajectory_json(path):
             raise ValueError(
                 f'trajectory pose #{index} missing fields: {", ".join(missing)}'
             )
-        normalized.append({
+        entry = {
             'i': int(pose['i']),
             'x': float(pose['x']),
             'y': float(pose['y']),
             'theta': float(pose['theta']),
             'stamp': float(pose['stamp']),
-        })
+        }
+        # Pose de odometria cruda del keyframe (opcional, generada por la 1a pasada).
+        # Permite a la 2a pasada corregir la odometria densa con la solucion del SLAM.
+        odom = pose.get('odom')
+        if isinstance(odom, dict) and {'x', 'y', 'theta'} <= set(odom):
+            entry['odom'] = {
+                'x': float(odom['x']),
+                'y': float(odom['y']),
+                'theta': float(odom['theta']),
+            }
+        normalized.append(entry)
 
     normalized.sort(key=lambda pose: pose['stamp'])
     return normalized, landmarks
