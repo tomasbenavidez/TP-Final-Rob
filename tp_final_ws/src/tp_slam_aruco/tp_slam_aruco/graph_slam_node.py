@@ -1,6 +1,7 @@
 import json
 import math
 import csv
+import os
 from dataclasses import replace
 import numpy as np
 
@@ -583,6 +584,9 @@ class GraphSlamNode(Node):
             )
             rows.append(build_geometry_debug_row(observation_for_row, landmark_x, landmark_y))
         try:
+            parent_dir = os.path.dirname(self.geometry_debug_file)
+            if parent_dir:
+                os.makedirs(parent_dir, exist_ok=True)
             with open(self.geometry_debug_file, 'w', newline='') as handle:
                 writer = csv.DictWriter(
                     handle,

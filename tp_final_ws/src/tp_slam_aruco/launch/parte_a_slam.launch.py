@@ -211,7 +211,7 @@ def generate_launch_description():
                 max_reprojection_error_px, value_type=float
             ),
             'allowed_marker_ids': allowed_marker_ids,
-            'diagnostics_file': '/home/tomasbenavidez/Robotica/TP-Final-Rob/tp_final_ws/logs_runs/aruco_detections.csv',
+            'diagnostics_file': '/tmp/aruco_detections.csv',
         }],
     )
 
@@ -242,7 +242,7 @@ def generate_launch_description():
             'camera_ty': camera_ty,
             'camera_yaw': camera_yaw,
             'trajectory_file': trajectory_file,
-            'geometry_debug_file': '/home/tomasbenavidez/Robotica/TP-Final-Rob/tp_final_ws/logs_runs/aruco_geometry_debug.csv',
+            'geometry_debug_file': '/tmp/aruco_geometry_debug.csv',
         }],
     )
 

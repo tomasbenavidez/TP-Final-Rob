@@ -25,6 +25,7 @@ en el tablero; este archivo arranca con la detección base sólida (F2-A).
 
 import numpy as np
 import csv
+import os
 
 import rclpy
 from rclpy.node import Node
@@ -268,6 +269,9 @@ class ArucoDetectorNode(Node):
         if not self.diagnostics_file:
             return None
         if self._diag_writer is None:
+            parent_dir = os.path.dirname(self.diagnostics_file)
+            if parent_dir:
+                os.makedirs(parent_dir, exist_ok=True)
             self._diag_handle = open(self.diagnostics_file, 'w', newline='')
             self._diag_writer = csv.DictWriter(
                 self._diag_handle,
