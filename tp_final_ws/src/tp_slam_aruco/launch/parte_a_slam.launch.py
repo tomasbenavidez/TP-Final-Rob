@@ -45,16 +45,6 @@ def generate_launch_description():
         default_value='',
         description='Ruta al YAML con K y coeficientes de distorsión (TB4 #0)',
     )
-    allow_yaml_fallback_arg = DeclareLaunchArgument(
-        'allow_yaml_fallback',
-        default_value='false',
-        description='Permitir usar el YAML si todavía no llegó camera_info.',
-    )
-    allow_fallback_tf_arg = DeclareLaunchArgument(
-        'allow_fallback_tf',
-        default_value='false',
-        description='Permitir extrínsecos numéricos si no está disponible TF cámara->base.',
-    )
     kf_dist_arg = DeclareLaunchArgument(
         'kf_dist',
         default_value='0.15',
@@ -67,7 +57,7 @@ def generate_launch_description():
     )
     reobs_min_parallax_arg = DeclareLaunchArgument(
         'reobs_min_parallax',
-        default_value='0.12',
+        default_value='0.20',
         description='Parallax mínima para aceptar una reobservación (metros)',
     )
     optimize_every_arg = DeclareLaunchArgument(
@@ -113,9 +103,9 @@ def generate_launch_description():
     )
     camera_frame_arg = DeclareLaunchArgument(
         'camera_frame',
-        default_value='',
-        description='Override opcional del frame_id de cámara. '
-                    'Por defecto se usa image.header.frame_id.',
+        default_value='oakd_rgb_camera_optical_frame',
+        description='frame_id de la cámara. graph_slam_node usará el TF '
+                    'de este frame a base_link para transformar observaciones.',
     )
     use_sim_time_arg = DeclareLaunchArgument(
         'use_sim_time',
@@ -132,70 +122,38 @@ def generate_launch_description():
         default_value=rviz_default_config,
         description='Ruta al archivo .rviz para la visualizacion de Parte A.',
     )
-    diagnostics_window_frames_arg = DeclareLaunchArgument(
-        'diagnostics_window_frames',
-        default_value='50',
-        description='Cantidad de frames usada para resumir detecciones ArUco.',
+    min_marker_area_px_arg = DeclareLaunchArgument(
+        'min_marker_area_px',
+        default_value='250.0',
+        description='Area minima del marcador detectado en pixeles.',
     )
-    diagnostics_topic_arg = DeclareLaunchArgument(
-        'diagnostics_topic',
-        default_value='/landmark_detection_stats',
-        description='Tópico diagnóstico con [raw, valid, valid_unique] por frame.',
+    max_marker_depth_arg = DeclareLaunchArgument(
+        'max_marker_depth',
+        default_value='3.0',
+        description='Profundidad maxima aceptada para ArUco en metros.',
     )
-    min_visual_landmarks_arg = DeclareLaunchArgument(
-        'min_visual_landmarks',
-        default_value='2',
-        description='Cantidad mínima de landmarks válidos para crear keyframes visuales.',
-    )
-    min_candidate_observations_arg = DeclareLaunchArgument(
-        'min_candidate_observations',
-        default_value='2',
-        description='Observaciones necesarias para confirmar un landmark nuevo.',
-    )
-    max_candidate_reprojection_arg = DeclareLaunchArgument(
-        'max_candidate_reprojection_error_px',
+    max_reprojection_error_px_arg = DeclareLaunchArgument(
+        'max_reprojection_error_px',
         default_value='4.0',
-        description='Error de reproyección máximo promedio para confirmar un landmark.',
+        description='Error maximo de reproyeccion para aceptar una pose ArUco.',
     )
-    min_marker_area_arg = DeclareLaunchArgument(
-        'min_marker_area_px2',
-        default_value='120.0',
-        description='Área mínima del tag en píxeles cuadrados para aceptarlo.',
+    allowed_marker_ids_arg = DeclareLaunchArgument(
+        'allowed_marker_ids',
+        default_value='',
+        description='Whitelist opcional de IDs ArUco, separados por coma.',
     )
-    max_candidate_buffer_arg = DeclareLaunchArgument(
-        'max_candidate_buffer_observations',
-        default_value='10',
-        description='Máximo de observaciones acumuladas antes de resetear un candidato.',
+    min_landmark_observations_arg = DeclareLaunchArgument(
+        'min_landmark_observations',
+        default_value='3',
+        description='Cantidad de keyframes donde debe aparecer un ID nuevo.',
     )
-    candidate_reset_arg = DeclareLaunchArgument(
-        'candidate_reset_on_bad_observation',
-        default_value='true',
-        description='Resetear candidatos si entra una observación mala.',
-    )
-    min_candidate_pose_sep_arg = DeclareLaunchArgument(
-        'min_candidate_pose_separation_m',
-        default_value='0.08',
-        description='Separación mínima entre poses para confirmar un candidato.',
-    )
-    max_obs_age_new_arg = DeclareLaunchArgument(
-        'max_observation_age_s_for_new_landmark',
-        default_value='0.20',
-        description='Edad máxima de observación para sembrar un landmark nuevo.',
-    )
-    max_obs_age_reobs_arg = DeclareLaunchArgument(
-        'max_observation_age_s_for_reobservation',
-        default_value='0.25',
-        description='Edad máxima de observación para reobservaciones.',
-    )
-    min_landmark_clearance_arg = DeclareLaunchArgument(
-        'min_landmark_clearance_m',
-        default_value='0.20',
-        description='Distancia mínima razonable entre trayectoria y landmark.',
+    max_landmark_position_jump_arg = DeclareLaunchArgument(
+        'max_landmark_position_jump',
+        default_value='0.75',
+        description='Salto maximo en metros para aceptar una reobservacion ArUco.',
     )
 
     calibration_file = LaunchConfiguration('calibration_file')
-    allow_yaml_fallback = LaunchConfiguration('allow_yaml_fallback')
-    allow_fallback_tf = LaunchConfiguration('allow_fallback_tf')
     camera_frame = LaunchConfiguration('camera_frame')
     kf_dist = LaunchConfiguration('kf_dist')
     kf_angle_max = LaunchConfiguration('kf_angle_max')
@@ -211,18 +169,12 @@ def generate_launch_description():
     use_sim_time = LaunchConfiguration('use_sim_time')
     launch_rviz = LaunchConfiguration('launch_rviz')
     rviz_config = LaunchConfiguration('rviz_config')
-    diagnostics_window_frames = LaunchConfiguration('diagnostics_window_frames')
-    diagnostics_topic = LaunchConfiguration('diagnostics_topic')
-    min_visual_landmarks = LaunchConfiguration('min_visual_landmarks')
-    min_candidate_observations = LaunchConfiguration('min_candidate_observations')
-    max_candidate_reprojection = LaunchConfiguration('max_candidate_reprojection_error_px')
-    min_marker_area_px2 = LaunchConfiguration('min_marker_area_px2')
-    max_candidate_buffer_observations = LaunchConfiguration('max_candidate_buffer_observations')
-    candidate_reset_on_bad_observation = LaunchConfiguration('candidate_reset_on_bad_observation')
-    min_candidate_pose_separation_m = LaunchConfiguration('min_candidate_pose_separation_m')
-    max_observation_age_s_for_new_landmark = LaunchConfiguration('max_observation_age_s_for_new_landmark')
-    max_observation_age_s_for_reobservation = LaunchConfiguration('max_observation_age_s_for_reobservation')
-    min_landmark_clearance_m = LaunchConfiguration('min_landmark_clearance_m')
+    min_marker_area_px = LaunchConfiguration('min_marker_area_px')
+    max_marker_depth = LaunchConfiguration('max_marker_depth')
+    max_reprojection_error_px = LaunchConfiguration('max_reprojection_error_px')
+    allowed_marker_ids = LaunchConfiguration('allowed_marker_ids')
+    min_landmark_observations = LaunchConfiguration('min_landmark_observations')
+    max_landmark_position_jump = LaunchConfiguration('max_landmark_position_jump')
 
     tf_bridge_node = Node(
         package='tp_slam_aruco',
@@ -245,24 +197,21 @@ def generate_launch_description():
         output='screen',
         parameters=[{
             'calibration_file': calibration_file,
-            'allow_yaml_fallback': allow_yaml_fallback,
-            'allow_fallback_tf': allow_fallback_tf,
             'image_topic': 'tb4_0/oakd/rgb/preview/image_raw',
             'marker_length': 0.0889,
             'aruco_dict': 'DICT_4X4_50',
             'camera_frame': camera_frame,
-            'base_frame': 'base_link',
-            'raw_landmarks_topic': '/landmarks_raw',
-            'accepted_landmarks_topic': '/landmarks_accepted',
-            'observations_topic': '/landmark_observations',
-            'diagnostics_window_frames': diagnostics_window_frames,
-            'diagnostics_topic': diagnostics_topic,
-            'min_marker_area_px2': ParameterValue(
-                min_marker_area_px2, value_type=float
+            'detections_topic': '/aruco_detections',
+            'debug_image_topic': '/aruco/debug_image',
+            'publish_debug_image': True,
+            'min_marker_area_px': ParameterValue(min_marker_area_px, value_type=float),
+            'min_marker_depth': 0.15,
+            'max_marker_depth': ParameterValue(max_marker_depth, value_type=float),
+            'max_reprojection_error_px': ParameterValue(
+                max_reprojection_error_px, value_type=float
             ),
-            'camera_tx': camera_tx,
-            'camera_ty': camera_ty,
-            'camera_yaw': camera_yaw,
+            'allowed_marker_ids': allowed_marker_ids,
+            'diagnostics_file': '/tmp/aruco_detections.csv',
         }],
     )
 
@@ -273,25 +222,27 @@ def generate_launch_description():
         output='screen',
         parameters=[{
             'odom_topic': 'tb4_0/odom',
-            'observations_topic': '/landmark_observations',
             'kf_dist': kf_dist,
             'kf_angle_max': kf_angle_max,
             'reobs_min_parallax': reobs_min_parallax,
             'optimize_every': optimize_every,
+            'landmarks_topic': '/aruco_detections',
+            'optimized_landmarks_topic': '/landmarks',
+            'legacy_landmarks_topic': '/landmarks_opt',
+            'base_debug_topic': '/aruco_base_debug',
+            'min_marker_depth': 0.15,
+            'max_marker_depth': ParameterValue(max_marker_depth, value_type=float),
+            'min_landmark_observations': ParameterValue(
+                min_landmark_observations, value_type=int
+            ),
+            'max_landmark_position_jump': ParameterValue(
+                max_landmark_position_jump, value_type=float
+            ),
             'camera_tx': camera_tx,
             'camera_ty': camera_ty,
             'camera_yaw': camera_yaw,
             'trajectory_file': trajectory_file,
-            'visual_diagnostics_topic': diagnostics_topic,
-            'min_visual_landmarks': min_visual_landmarks,
-            'min_candidate_observations': min_candidate_observations,
-            'max_candidate_reprojection_error_px': max_candidate_reprojection,
-            'max_candidate_buffer_observations': max_candidate_buffer_observations,
-            'candidate_reset_on_bad_observation': candidate_reset_on_bad_observation,
-            'min_candidate_pose_separation_m': min_candidate_pose_separation_m,
-            'max_observation_age_s_for_new_landmark': max_observation_age_s_for_new_landmark,
-            'max_observation_age_s_for_reobservation': max_observation_age_s_for_reobservation,
-            'min_landmark_clearance_m': min_landmark_clearance_m,
+            'geometry_debug_file': '/tmp/aruco_geometry_debug.csv',
         }],
     )
 
@@ -307,8 +258,6 @@ def generate_launch_description():
 
     return LaunchDescription([
         calib_arg,
-        allow_yaml_fallback_arg,
-        allow_fallback_tf_arg,
         camera_frame_arg,
         kf_dist_arg,
         kf_angle_max_arg,
@@ -324,18 +273,12 @@ def generate_launch_description():
         use_sim_time_arg,
         launch_rviz_arg,
         rviz_config_arg,
-        diagnostics_window_frames_arg,
-        diagnostics_topic_arg,
-        min_visual_landmarks_arg,
-        min_candidate_observations_arg,
-        max_candidate_reprojection_arg,
-        min_marker_area_arg,
-        max_candidate_buffer_arg,
-        candidate_reset_arg,
-        min_candidate_pose_sep_arg,
-        max_obs_age_new_arg,
-        max_obs_age_reobs_arg,
-        min_landmark_clearance_arg,
+        min_marker_area_px_arg,
+        max_marker_depth_arg,
+        max_reprojection_error_px_arg,
+        allowed_marker_ids_arg,
+        min_landmark_observations_arg,
+        max_landmark_position_jump_arg,
         SetParameter(name='use_sim_time', value=use_sim_time),
         tf_bridge_node,
         aruco_node,

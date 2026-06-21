@@ -71,63 +71,24 @@ def build_landmark_markers(map_frame, stamp, landmarks):
     return marker_array
 
 
-def build_raw_landmark_markers(frame_id, stamp, detections):
+def build_base_debug_markers(base_frame, stamp, observations):
     marker_array = MarkerArray()
-
-    clear = Marker()
-    clear.header.frame_id = frame_id
-    clear.header.stamp = stamp
-    clear.action = Marker.DELETEALL
-    marker_array.markers.append(clear)
-
-    for detection in detections:
+    for observation in observations:
         marker = Marker()
-        marker.header.frame_id = frame_id
+        marker.header.frame_id = base_frame
         marker.header.stamp = stamp
-        marker.ns = 'aruco_raw'
-        marker.id = int(detection['id'])
-        marker.type = Marker.CUBE
+        marker.ns = 'aruco_base_debug'
+        marker.id = int(observation['id'])
+        marker.type = Marker.SPHERE
         marker.action = Marker.ADD
-        marker.pose.position.x = float(detection['tvec'][0])
-        marker.pose.position.y = float(detection['tvec'][1])
-        marker.pose.position.z = float(detection['tvec'][2])
-        marker.pose.orientation.w = 1.0
-        marker.scale.x = marker.scale.y = marker.scale.z = 0.1
-        marker.color.r = 1.0
-        marker.color.g = 1.0
-        marker.color.a = 0.9
-        marker_array.markers.append(marker)
-
-    return marker_array
-
-
-def build_accepted_landmark_markers(frame_id, stamp, detections):
-    marker_array = MarkerArray()
-
-    clear = Marker()
-    clear.header.frame_id = frame_id
-    clear.header.stamp = stamp
-    clear.action = Marker.DELETEALL
-    marker_array.markers.append(clear)
-
-    for detection in detections:
-        marker = Marker()
-        marker.header.frame_id = frame_id
-        marker.header.stamp = stamp
-        marker.ns = 'aruco_accepted'
-        marker.id = int(detection['id'])
-        marker.type = Marker.CUBE
-        marker.action = Marker.ADD
-        marker.pose.position.x = float(detection['tvec'][0])
-        marker.pose.position.y = float(detection['tvec'][1])
-        marker.pose.position.z = float(detection['tvec'][2])
-        marker.pose.orientation.w = 1.0
-        marker.scale.x = marker.scale.y = marker.scale.z = 0.08
+        marker.scale.x = marker.scale.y = marker.scale.z = 0.10
         marker.color.g = 1.0
         marker.color.b = 1.0
         marker.color.a = 0.9
+        marker.pose.position.x = float(observation['x_base'])
+        marker.pose.position.y = float(observation['y_base'])
+        marker.pose.orientation.w = 1.0
         marker_array.markers.append(marker)
-
     return marker_array
 
 

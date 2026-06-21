@@ -1,6 +1,6 @@
 import json
 
-from tp_slam_aruco.slam_io import write_trajectory_json
+from tp_slam_aruco.slam_io import read_trajectory_json, write_trajectory_json
 
 
 def test_write_trajectory_json_creates_missing_parent_directories(tmp_path):
@@ -27,27 +27,32 @@ def test_write_trajectory_json_creates_missing_parent_directories(tmp_path):
     }
 
 
-def test_write_trajectory_json_persists_stats_block(tmp_path):
-    output_path = tmp_path / 'trayectoria.json'
+def test_read_trajectory_json_sorts_poses_by_stamp(tmp_path):
+    input_path = tmp_path / 'trajectory.json'
+    input_path.write_text(json.dumps({
+        'trajectory': [
+            {'i': 1, 'x': 1.0, 'y': 0.0, 'theta': 0.0, 'stamp': 2.0},
+            {'i': 0, 'x': 0.0, 'y': 0.0, 'theta': 0.0, 'stamp': 1.0},
+        ],
+        'landmarks': {'7': {'x': 2.0, 'y': 3.0}},
+    }))
 
-    write_trajectory_json(
-        path=output_path,
-        trajectory=[],
-        landmarks={},
-        stats={
-            'visual_observability': {
-                'summary': {
-                    'frame_count': 2,
-                    'max_valid_unique_ever': 2,
-                },
-                'frames': [
-                    {'stamp': 1.0, 'raw_count': 2, 'valid_unique_count': 2},
-                    {'stamp': 2.0, 'raw_count': 1, 'valid_unique_count': 0},
-                ],
-            }
-        },
-    )
+    trajectory, landmarks = read_trajectory_json(input_path)
 
-    payload = json.loads(output_path.read_text())
-    assert payload['stats']['visual_observability']['summary']['frame_count'] == 2
-    assert payload['stats']['visual_observability']['frames'][0]['valid_unique_count'] == 2
+    assert [pose['i'] for pose in trajectory] == [0, 1]
+    assert landmarks == {'7': {'x': 2.0, 'y': 3.0}}
+
+
+def test_read_trajectory_json_rejects_missing_pose_fields(tmp_path):
+    input_path = tmp_path / 'trajectory.json'
+    input_path.write_text(json.dumps({
+        'trajectory': [{'i': 0, 'x': 0.0, 'y': 0.0, 'stamp': 1.0}],
+        'landmarks': {},
+    }))
+
+    try:
+        read_trajectory_json(input_path)
+    except ValueError as exc:
+        assert 'theta' in str(exc)
+    else:
+        raise AssertionError('expected missing theta to be rejected')

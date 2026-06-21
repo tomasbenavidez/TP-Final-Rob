@@ -12,6 +12,8 @@ import numpy as np
 import cv2
 import yaml
 
+from tp_slam_aruco.aruco_filtering import marker_area_px
+
 
 def load_camera_calibration(path: str):
     """
@@ -69,7 +71,7 @@ def estimate_marker_poses(corners, ids, marker_length,
 
     Retorna
     -------
-    lista de dicts: {'id', 'rvec', 'tvec'}
+    lista de dicts: {'id', 'rvec', 'tvec', 'area_px', 'reprojection_error_px'}
         rvec : vector de rotación (Rodrigues) marcador->cámara
         tvec : traslación (x, y, z) del marcador en el frame de la cámara [m]
     """
@@ -93,11 +95,17 @@ def estimate_marker_poses(corners, ids, marker_length,
             flags=cv2.SOLVEPNP_IPPE_SQUARE,  # óptimo para marcadores planos cuadrados
         )
         if ok:
+            projected, _ = cv2.projectPoints(
+                object_points, rvec, tvec, camera_matrix, dist_coeffs
+            )
+            residual = projected.reshape(4, 2) - image_points
+            reprojection_error = float(np.sqrt(np.mean(np.sum(residual * residual, axis=1))))
             detections.append({
                 'id': int(marker_id),
                 'rvec': rvec.flatten(),
                 'tvec': tvec.flatten(),
-                'image_points': image_points,
+                'area_px': marker_area_px(image_points),
+                'reprojection_error_px': reprojection_error,
             })
     return detections
 

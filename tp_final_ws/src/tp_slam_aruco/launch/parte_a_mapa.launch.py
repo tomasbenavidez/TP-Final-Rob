@@ -19,6 +19,7 @@ USO:
   Ctrl+C al terminar el bag → exporta mapa.pgm + mapa.yaml
 """
 
+import math
 import os
 
 from ament_index_python.packages import get_package_share_directory
@@ -46,30 +47,11 @@ def generate_launch_description():
         default_value='0.05',
         description='Resolución de la grilla en metros/celda',
     )
-    enable_motion_filter_arg = DeclareLaunchArgument(
-        'enable_motion_filter',
-        default_value='true',
-        description='Integrar scans solo en tramos quietos o casi rectos.',
-    )
-    max_angular_speed_arg = DeclareLaunchArgument(
-        'max_angular_speed_rad_s',
-        default_value='0.10',
-        description='Velocidad angular máxima para integrar scans.',
-    )
-    max_curvature_arg = DeclareLaunchArgument(
-        'max_path_curvature_rad_m',
-        default_value='0.35',
-        description='Curvatura máxima permitida para integrar scans.',
-    )
-    max_lateral_change_arg = DeclareLaunchArgument(
-        'max_lateral_pose_change_m',
-        default_value='0.03',
-        description='Desvío lateral máximo permitido en la ventana cinemática.',
-    )
-    still_speed_arg = DeclareLaunchArgument(
-        'still_linear_speed_m_s',
-        default_value='0.03',
-        description='Velocidad lineal por debajo de la cual el robot se considera quieto.',
+    max_angular_velocity_arg = DeclareLaunchArgument(
+        'max_angular_velocity',
+        default_value='0.0',
+        description='No integrar scans con |omega| mayor a este valor (rad/s). '
+                    '0 desactiva el gate de rotación.',
     )
 
     occupancy_node = Node(
@@ -82,19 +64,14 @@ def generate_launch_description():
             'map_output':      LaunchConfiguration('map_output'),
             'resolution':      LaunchConfiguration('resolution'),
             'scan_topic':      'tb4_0/scan',
+            'odom_topic':      'tb4_0/odom',
             'publish_every':   50,
-            'base_frame':      'base_link',
-            'scan_frame':      'rplidar_link',
-            'tf_static_topic': '/tb4_0/tf_static',
-            'use_tf_static_extrinsics': True,
+            # Extrinsecos LIDAR del TF estatico del bag:
+            #   base_link -> shell_link (yaw 0) -> rplidar_link (tx=-0.04, yaw=+90deg)
             'lidar_tx':       -0.04,
             'lidar_ty':        0.0,
-            'lidar_yaw':       1.57079632679,
-            'enable_motion_filter': LaunchConfiguration('enable_motion_filter'),
-            'max_angular_speed_rad_s': LaunchConfiguration('max_angular_speed_rad_s'),
-            'max_path_curvature_rad_m': LaunchConfiguration('max_path_curvature_rad_m'),
-            'max_lateral_pose_change_m': LaunchConfiguration('max_lateral_pose_change_m'),
-            'still_linear_speed_m_s': LaunchConfiguration('still_linear_speed_m_s'),
+            'lidar_yaw':       math.pi / 2,   # +90deg: el RPLIDAR esta rotado en base_link
+            'max_angular_velocity': LaunchConfiguration('max_angular_velocity'),
         }],
     )
 
@@ -103,10 +80,6 @@ def generate_launch_description():
         trajectory_file_arg,
         map_output_arg,
         resolution_arg,
-        enable_motion_filter_arg,
-        max_angular_speed_arg,
-        max_curvature_arg,
-        max_lateral_change_arg,
-        still_speed_arg,
+        max_angular_velocity_arg,
         occupancy_node,
     ])

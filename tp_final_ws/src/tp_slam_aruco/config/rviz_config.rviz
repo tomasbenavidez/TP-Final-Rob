@@ -188,7 +188,19 @@ Visualization Manager:
         Durability Policy: Volatile
         History Policy: Keep Last
         Reliability Policy: Reliable
-        Value: /landmarks_opt
+        Value: /landmarks
+      Value: true
+    - Class: rviz_default_plugins/MarkerArray
+      Enabled: true
+      Name: ArUco Base Debug
+      Namespaces:
+        aruco_base_debug: true
+      Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /aruco_base_debug
       Value: true
     - Class: rviz_default_plugins/TF
       Enabled: true
@@ -248,7 +260,7 @@ Visualization Manager:
       Max Value: 1
       Median window: 5
       Min Value: 0
-      Name: Image
+      Name: ArUco Debug Image
       Normalize Range: true
       Queue Size: 2
       Topic:
@@ -256,7 +268,7 @@ Visualization Manager:
         Durability Policy: Volatile
         History Policy: Keep Last
         Reliability Policy: Best Effort
-        Value: /tb4_0/oakd/rgb/preview/image_raw
+        Value: /aruco/debug_image
       Value: true
   Enabled: true
   Global Options:
