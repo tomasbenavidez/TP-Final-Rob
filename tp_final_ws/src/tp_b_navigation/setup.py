@@ -3,8 +3,7 @@ import os
 from glob import glob
 
 package_name = 'tp_b_navigation'
-map_files = glob(os.path.abspath(os.path.join(
-    os.path.dirname(__file__), '../../../mapas/map.*')))
+map_files = glob('../../../mapas/map.*')
 
 setup(
     name=package_name,

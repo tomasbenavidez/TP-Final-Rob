@@ -1,6 +1,9 @@
 from pathlib import Path
+import os
 import re
+import runpy
 import unittest
+from unittest.mock import patch
 
 
 PACKAGE_ROOT = Path(__file__).resolve().parents[1]
@@ -24,6 +27,32 @@ class PortableRuntimePathsTest(unittest.TestCase):
         setup = (PACKAGE_ROOT / "setup.py").read_text(encoding="utf-8")
         self.assertIn("os.path.join('share', package_name, 'maps')", setup)
         self.assertIn("mapas/map.*", setup)
+
+    def test_setup_data_file_sources_are_relative_for_colcon(self):
+        captured = {}
+
+        def capture_setup(**kwargs):
+            captured.update(kwargs)
+
+        previous_cwd = Path.cwd()
+        try:
+            os.chdir(PACKAGE_ROOT)
+            with patch("setuptools.setup", capture_setup):
+                runpy.run_path(str(PACKAGE_ROOT / "setup.py"), run_name="__main__")
+        finally:
+            os.chdir(previous_cwd)
+
+        map_sources = []
+        for destination, sources in captured["data_files"]:
+            if destination.endswith("/maps"):
+                map_sources.extend(sources)
+
+        self.assertEqual({"map.pgm", "map.yaml"}, {
+            Path(source).name for source in map_sources
+        })
+        for source in map_sources:
+            with self.subTest(source=source):
+                self.assertFalse(os.path.isabs(source))
 
     def test_runtime_defaults_resolve_package_share(self):
         files = [
