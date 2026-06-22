@@ -43,6 +43,22 @@ def generate_launch_description():
                         'camera_link', 'camera_optical_frame']),
     ]
 
+    # El modelo TurtleBot3BurgerRGBD incluye el burger como sub-modelo anidado 'base_robot',
+    # por lo que Gazebo publica sus frames SCOPEADOS (base_robot::base_footprint,
+    # base_robot::base_scan) mientras robot_state_publisher usa nombres PLANOS. Sin estos
+    # puentes el árbol del robot nunca conecta con map -> la cámara/LIDAR no se transforman a
+    # map y la misión no arranca. Identidades que reconectan ambos árboles:
+    #   - diff_drive publica odom->base_robot::base_footprint  =>  puenteamos a base_footprint
+    #   - el /scan llega con frame_id base_robot::base_scan     =>  lo colgamos de base_scan
+    tf_frame_bridges = [
+        Node(package='tf2_ros', executable='static_transform_publisher',
+             arguments=['0', '0', '0', '0', '0', '0',
+                        'base_robot::base_footprint', 'base_footprint']),
+        Node(package='tf2_ros', executable='static_transform_publisher',
+             arguments=['0', '0', '0', '0', '0', '0',
+                        'base_scan', 'base_robot::base_scan']),
+    ]
+
     cone_specs = [
         ('red_cone', 'ConeRed', '1.65', '1.50'),
         ('yellow_cone', 'ConeYellow', '-1.70', '1.45'),
@@ -72,6 +88,7 @@ def generate_launch_description():
         environment('casa_obs', 'custom_casa_obs.launch.py'),
         TimerAction(period=2.0, actions=[spawn_robot] + cone_nodes),
         *static_camera_tf,
+        *tf_frame_bridges,
         navigation,
         detector,
         manager,

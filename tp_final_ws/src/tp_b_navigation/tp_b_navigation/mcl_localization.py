@@ -171,6 +171,10 @@ class MCL(Node):
         self.get_logger().info(
             f'Pose inicial fijada en ({x:.2f}, {y:.2f}, {math.degrees(yaw):.0f}°).')
         self.publish_particles()
+        # Publicar /mcl_pose ya al localizar: las correcciones sólo ocurren al moverse, así
+        # que sin esto /mcl_pose no sale con el robot quieto y los consumidores (p. ej. el
+        # mission_manager de Parte C, que exige /mcl_pose para arrancar) quedan bloqueados.
+        self.publish_pose()
 
     def odom_cb(self, msg: Odometry):
         p = msg.pose.pose
