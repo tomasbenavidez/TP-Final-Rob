@@ -6,7 +6,6 @@ if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
 endif()
 
 find_package(ament_cmake REQUIRED)
-find_package(Python3 REQUIRED COMPONENTS Development)
 find_package(geometry_msgs REQUIRED)
 find_package(nav_msgs REQUIRED)
 find_package(rclcpp REQUIRED)
@@ -32,7 +31,6 @@ set(EXEC_NAME turtlebot3_custom_simulation)
 add_executable(${EXEC_NAME} src/turtlebot3_custom_simulation.cpp)
 
 ament_target_dependencies(${EXEC_NAME} ${dependencies})
-target_link_libraries(${EXEC_NAME} Python3::Python)
 
 if(APPLE)
   set_target_properties(${EXEC_NAME} PROPERTIES

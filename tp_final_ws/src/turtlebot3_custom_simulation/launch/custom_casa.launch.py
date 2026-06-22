@@ -1,6 +1,7 @@
 from launch import LaunchDescription
 from launch_ros.actions import Node
-from launch.actions import IncludeLaunchDescription, TimerAction
+from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, TimerAction
+from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 import os
 from launch.substitutions import LaunchConfiguration
@@ -36,6 +37,7 @@ def generate_launch_description():
     # )
 
     use_sim_time = LaunchConfiguration('use_sim_time', default='true')
+    spawn_robot = LaunchConfiguration('spawn_robot')
 
     pkg_gazebo_ros = get_package_share_directory('gazebo_ros')
 
@@ -59,7 +61,8 @@ def generate_launch_description():
         launch_arguments={
             'x_pose': x_pose,
             'y_pose': y_pose
-        }.items()
+        }.items(),
+        condition=IfCondition(spawn_robot),
     )
 
     robot_state_publisher_cmd = IncludeLaunchDescription(
@@ -70,6 +73,7 @@ def generate_launch_description():
     )
 
     return LaunchDescription([
+        DeclareLaunchArgument('spawn_robot', default_value='true'),
         gzserver_cmd,
         gzclient_cmd,
         spawn_turtlebot_cmd,

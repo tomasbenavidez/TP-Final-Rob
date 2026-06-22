@@ -6,7 +6,7 @@ Este repositorio implementa un sistema ROS 2 en etapas:
 
 1. **Parte A:** Graph SLAM con ArUco sobre un rosbag real del TurtleBot4 y generación posterior de una grilla de ocupación.
 2. **Parte B:** localización probabilística y navegación autónoma de un TurtleBot3 simulado dentro de un mapa estático.
-3. **Parte C:** despliegue futuro sobre el robot real y misión de percepción activa.
+3. **Parte C:** exploración informativa, detección de conos rojos y despliegue sim-to-real.
 
 La integración normal es secuencial: Parte A produce `map.yaml` + `map.pgm`; Parte B carga ese mapa. No asumir que A y B se ejecutan simultáneamente.
 
@@ -15,9 +15,11 @@ La integración normal es secuencial: Parte A produce `map.yaml` + `map.pgm`; Pa
 ```text
 mapas/                              mapa estático de referencia
 docs/parte_b/                       documentación y resultados de Parte B
+docs/parte_c/                       documentación y ejecución de Parte C
 tp_final_ws/src/tp_slam_aruco/      paquete de Parte A
 tp_final_ws/src/tp_slam_interfaces/ mensajes ROS propios
 tp_final_ws/src/tp_b_navigation/    paquete de Parte B
+tp_final_ws/src/tp_c_mission/       percepción y supervisor de Parte C
 ```
 
 ## Parte A
@@ -64,6 +66,23 @@ Invariantes importantes:
 - No cambiar parámetros de MCL, A*, pure pursuit o evasión sin una prueba que justifique el cambio.
 - Los mapas instalados se resuelven desde `share/tp_b_navigation/maps`; no introducir rutas personales.
 
+## Parte C
+
+Launch principales:
+
+- `parte_c_sim.launch.py`: misión completa en `custom_casa` o `custom_casa_obs`.
+- `parte_c_bag.launch.py`: calibración/regresión del detector con rosbag de visión.
+- `parte_c_real.launch.py`: mapa y landmarks de Parte A, ArUco real y TurtleBot4.
+
+Invariantes importantes:
+
+- `tp_c_mission` no publica `/cmd_vel`; envía `/mission_goal` a `state_machine`.
+- MCL continúa siendo el único productor de `map → odom` durante Parte C.
+- El perfil real no inicia `landmark_sensor`; usa `/observed_landmark_ids` desde `aruco_mcl_adapter`.
+- La detección del cono se valida temporalmente y produce una pose en `map`, no un comando directo.
+- La aproximación al cono se valida con la grilla y A*; no asumir camino libre por visibilidad de cámara.
+- El costmap dinámico y `custom_casa_obs2` quedan fuera de alcance.
+
 ## Contratos que difieren entre etapas
 
 - `/landmarks` de Parte A es un `MarkerArray` de ArUco optimizados.
@@ -79,7 +98,8 @@ Desde la raíz del repositorio:
 
 ```bash
 cd tp_final_ws
-colcon build --packages-select tp_slam_interfaces tp_slam_aruco tp_b_navigation
+colcon build --packages-select tp_slam_interfaces tp_slam_aruco \
+  tp_b_navigation tp_c_mission turtlebot3_custom_simulation
 source install/setup.bash
 ```
 
@@ -99,13 +119,21 @@ source tp_final_ws/install/setup.bash
 ros2 launch tp_b_navigation parte_b.launch.py
 ```
 
+Parte C:
+
+```bash
+source tp_final_ws/install/setup.bash
+ros2 launch tp_c_mission parte_c_sim.launch.py world:=casa
+ros2 service call /mission/start std_srvs/srv/Trigger '{}'
+```
+
 Para RoboStack/macOS se puede usar `source docs/parte_b/scripts/setup_parte_b.sh`; el script deriva la raíz del repositorio automáticamente.
 
 ## Verificación antes de entregar cambios
 
 ```bash
 python3 tp_final_ws/src/tp_b_navigation/test/test_portable_paths.py -v
-python3 -m compileall -q tp_final_ws/src/tp_b_navigation tp_final_ws/src/tp_slam_aruco
+python3 -m compileall -q tp_final_ws/src/tp_b_navigation tp_final_ws/src/tp_slam_aruco tp_final_ws/src/tp_c_mission
 git diff --check
 ```
 
@@ -113,9 +141,10 @@ Con ROS 2 disponible, ejecutar además:
 
 ```bash
 cd tp_final_ws
-colcon build --packages-select tp_slam_interfaces tp_slam_aruco tp_b_navigation
+colcon build --packages-select tp_slam_interfaces tp_slam_aruco \
+  tp_b_navigation tp_c_mission turtlebot3_custom_simulation
 source install/setup.bash
-python3 -m pytest src/tp_slam_aruco/test src/tp_b_navigation/test -q
+python3 -m pytest src/tp_slam_aruco/test src/tp_b_navigation/test src/tp_c_mission/test -q
 ```
 
 ## Límites de modificación

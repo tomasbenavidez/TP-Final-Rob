@@ -18,8 +18,6 @@ planes publicando en /plan_request y consume /plan.
 """
 
 import math
-from collections import deque
-import heapq
 
 import numpy as np
 
@@ -34,6 +32,7 @@ from std_msgs.msg import Bool
 from tf2_ros import Buffer, TransformListener
 
 from tp_b_navigation.utils import yaw_from_quaternion, quaternion_from_yaw
+from tp_b_navigation.planner_core import GridPlannerCore
 
 
 class GlobalPlanner(Node):
@@ -57,6 +56,7 @@ class GlobalPlanner(Node):
         self.map = None
         self.blocked = None      # bool [H,W] celdas no navegables (obstáculo inflado)
         self.cost = None         # float [H,W] penalización de cercanía (m)
+        self.core = None
         self.res = None
         self.ox = self.oy = 0.0
         self.W = self.H = 0
@@ -87,168 +87,39 @@ class GlobalPlanner(Node):
         self.H = msg.info.height
         data = np.array(msg.data, dtype=np.int16).reshape(self.H, self.W)
 
-        obst = (data == 100)
-        if not self.allow_unknown:
-            obst |= (data == -1)
-
-        # Distancia (en celdas) de cada celda libre al obstáculo más cercano (BFS multi-fuente).
-        dist_cells = self._distance_transform(obst)
-        dist_m = dist_cells * self.res
-
         inflate_cells = self.robot_radius / self.res
-        self.blocked = dist_cells < inflate_cells
-
-        # Penalización de cercanía: alta cerca de obstáculos, 0 más allá de clearance_max.
-        clr = np.clip(self.clear_max - dist_m, 0.0, self.clear_max)
-        self.cost = self.clear_w * clr
+        self.core = GridPlannerCore.from_occupancy(
+            data, self.res, self.ox, self.oy,
+            robot_radius=self.robot_radius,
+            clearance_weight=self.clear_w,
+            clearance_max=self.clear_max,
+            allow_unknown=self.allow_unknown,
+        )
+        self.blocked = self.core.blocked
+        self.cost = self.core.cost
         self.get_logger().info(
             f'Mapa recibido ({self.W}x{self.H}). Inflado ~{inflate_cells:.1f} celdas '
             f'({self.robot_radius:.2f} m).')
 
-    @staticmethod
-    def _distance_transform(obst):
-        """Distancia de Chebyshev (en celdas, 8-conexa) al obstáculo más cercano."""
-        H, W = obst.shape
-        INF = float('inf')
-        dist = np.full((H, W), INF, dtype=float)
-        dq = deque()
-        ys, xs = np.where(obst)
-        for r, c in zip(ys.tolist(), xs.tolist()):
-            dist[r, c] = 0.0
-            dq.append((r, c))
-        nbrs = ((-1, 0), (1, 0), (0, -1), (0, 1), (-1, -1), (-1, 1), (1, -1), (1, 1))
-        while dq:
-            r, c = dq.popleft()
-            d1 = dist[r, c] + 1.0
-            for dr, dc in nbrs:
-                nr, nc = r + dr, c + dc
-                if 0 <= nr < H and 0 <= nc < W and dist[nr, nc] > d1:
-                    dist[nr, nc] = d1
-                    dq.append((nr, nc))
-        return dist
-
     # ------------------------------------------------------------- conversiones
     def world_to_cell(self, x, y):
-        c = int((x - self.ox) / self.res)
-        r = int((y - self.oy) / self.res)
-        return r, c
+        return self.core.world_to_cell(x, y)
 
     def cell_to_world(self, r, c):
-        x = self.ox + (c + 0.5) * self.res
-        y = self.oy + (r + 0.5) * self.res
-        return x, y
+        return self.core.cell_to_world((r, c))
 
     def _nearest_free(self, r, c, max_radius=12):
-        """Si (r,c) cae en zona bloqueada, busca la celda libre más cercana (espiral BFS)."""
-        if not (0 <= r < self.H and 0 <= c < self.W):
-            return None
-        if not self.blocked[r, c]:
-            return (r, c)
-        seen = {(r, c)}
-        dq = deque([(r, c, 0)])
-        while dq:
-            cr, cc, d = dq.popleft()
-            if d > max_radius:
-                break
-            for dr, dc in ((-1, 0), (1, 0), (0, -1), (0, 1)):
-                nr, nc = cr + dr, cc + dc
-                if (nr, nc) in seen or not (0 <= nr < self.H and 0 <= nc < self.W):
-                    continue
-                seen.add((nr, nc))
-                if not self.blocked[nr, nc]:
-                    return (nr, nc)
-                dq.append((nr, nc, d + 1))
-        return None
+        return self.core.nearest_free((r, c), max_radius=max_radius)
 
     # ------------------------------------------------------------- A*
     def _astar(self, start, goal):
-        H, W = self.H, self.W
-        blocked = self.blocked
-        cost = self.cost
-        res = self.res
-
-        def heur(a, b):
-            return math.hypot(a[0] - b[0], a[1] - b[1]) * res
-
-        nbrs = ((-1, 0, 1.0), (1, 0, 1.0), (0, -1, 1.0), (0, 1, 1.0),
-                (-1, -1, 1.41421356), (-1, 1, 1.41421356),
-                (1, -1, 1.41421356), (1, 1, 1.41421356))
-
-        open_heap = [(heur(start, goal), 0.0, start)]
-        g = {start: 0.0}
-        came = {}
-        INF = float('inf')
-
-        while open_heap:
-            f, gc, cur = heapq.heappop(open_heap)
-            if cur == goal:
-                break
-            if gc > g.get(cur, INF):
-                continue
-            r, c = cur
-            for dr, dc, base in nbrs:
-                nr, nc = r + dr, c + dc
-                if not (0 <= nr < H and 0 <= nc < W) or blocked[nr, nc]:
-                    continue
-                # evitar cortar esquinas en diagonal
-                if dr != 0 and dc != 0 and (blocked[r + dr, c] or blocked[r, c + dc]):
-                    continue
-                ng = gc + base * res + cost[nr, nc] * base
-                if ng < g.get((nr, nc), INF):
-                    g[(nr, nc)] = ng
-                    came[(nr, nc)] = cur
-                    heapq.heappush(open_heap, (ng + heur((nr, nc), goal), ng, (nr, nc)))
-
-        if goal not in came and goal != start:
-            return None
-        # reconstruir
-        path = [goal]
-        node = goal
-        while node != start:
-            node = came[node]
-            path.append(node)
-        path.reverse()
-        return path
+        return self.core.plan_cells(start, goal, simplify=False)
 
     def _shortcut(self, cells):
-        """Simplifica la ruta con line-of-sight greedy (rutas más rectas y suaves, 1.6)."""
-        if len(cells) <= 2:
-            return cells
-        out = [cells[0]]
-        i = 0
-        n = len(cells)
-        while i < n - 1:
-            j = n - 1
-            while j > i + 1:
-                if self._line_clear(cells[i], cells[j]):
-                    break
-                j -= 1
-            out.append(cells[j])
-            i = j
-        return out
+        return self.core.simplify(cells)
 
     def _line_clear(self, a, b):
-        """Bresenham entre celdas: True si no atraviesa zona bloqueada."""
-        r0, c0 = a
-        r1, c1 = b
-        dr = abs(r1 - r0)
-        dc = abs(c1 - c0)
-        sr = 1 if r0 < r1 else -1
-        sc = 1 if c0 < c1 else -1
-        err = dr - dc
-        r, c = r0, c0
-        while True:
-            if self.blocked[r, c]:
-                return False
-            if r == r1 and c == c1:
-                return True
-            e2 = 2 * err
-            if e2 > -dc:
-                err -= dc
-                r += sr
-            if e2 < dr:
-                err += dr
-                c += sc
+        return self.core.line_clear(a, b)
 
     # ------------------------------------------------------------- request
     def request_cb(self, goal: PoseStamped):
