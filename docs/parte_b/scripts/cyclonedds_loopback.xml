@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Configuración de CycloneDDS para correr TODO en una sola máquina (loopback) en macOS.
+
+  Por qué: en este Mac (conda env `rosenv`, ROS 2 Humble por RoboStack) el FastDDS por
+  defecto no tiene ruta de multicast en la interfaz física ("No route to host"), así que
+  los nodos de procesos distintos (Gazebo vs la pila de Parte B) se descubren pero los
+  datos NO fluyen. CycloneDDS por 127.0.0.1 (unicast, sin multicast) lo resuelve.
+
+  Clave: MaxAutoParticipantIndex alto. Con Gazebo (~6 nodos) + la pila (7) + el daemon +
+  herramientas de CLI se supera el índice por defecto (9) y los participantes nuevos no
+  encuentran a los viejos -> "suscripto pero 0 datos". 100 deja margen de sobra.
+-->
+<CycloneDDS xmlns="https://cdds.io/config">
+  <Domain id="any">
+    <General>
+      <Interfaces>
+        <NetworkInterface address="127.0.0.1"/>
+      </Interfaces>
+      <AllowMulticast>false</AllowMulticast>
+      <EnableMulticastLoopback>true</EnableMulticastLoopback>
+    </General>
+    <Discovery>
+      <ParticipantIndex>auto</ParticipantIndex>
+      <MaxAutoParticipantIndex>100</MaxAutoParticipantIndex>
+      <Peers>
+        <Peer address="127.0.0.1"/>
+      </Peers>
+    </Discovery>
+  </Domain>
+</CycloneDDS>

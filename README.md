@@ -1,292 +1,159 @@
-# TP Final Rob - Parte A
+# TP Final de Robótica Autónoma
 
-Este repo hoy esta enfocado en la **Parte A** del TP final de Robotica Autonoma:
-tomar un rosbag real del TurtleBot4, hacer **Graph SLAM con ArUco**, y despues
-proyectar el LIDAR sobre la trayectoria corregida para generar un mapa.
+Implementación ROS 2 del flujo completo del trabajo final:
 
-La ruta real del workspace en este repo es:
+1. **Parte A — SLAM y mapeo:** procesa un rosbag real del TurtleBot4, estima la trayectoria con Graph SLAM y ArUco, y genera una grilla de ocupación.
+2. **Parte B — navegación autónoma:** carga un mapa estático, localiza el TurtleBot3 simulado con MCL y landmarks virtuales, planifica con A* y ejecuta el recorrido mediante una máquina de estados.
 
-```bash
-/Users/franco/TP-Final-Rob/tp_final_ws
-```
+Las partes se ejecutan por separado. Parte B usa por defecto el mapa simulado
+`map_sim.yaml` + `map_sim.pgm`; el mapa `map.yaml` + `map.pgm` de Parte A queda disponible.
 
-## Que corre hoy
-
-- **1ra pasada:** deteccion ArUco + Graph SLAM -> `/tmp/trayectoria.json`
-- **2da pasada:** trayectoria corregida + LIDAR -> `/tmp/mapa.pgm` y `/tmp/mapa.yaml`
-- **RViz:** se abre automaticamente desde `parte_a_slam.launch.py`
-- **Diagnostico ArUco:** cada deteccion queda registrada en `/tmp/aruco_detections.csv`
-- **Diagnostico geometrico:** las observaciones usadas por el grafo quedan en
-  `/tmp/aruco_geometry_debug.csv`
-
-Contrato principal de topicos:
-
-- `/aruco_detections`: detecciones crudas de ArUco en frame de camara/base.
-- `/aruco_base_debug`: detecciones ArUco transformadas al plano `base_link`.
-- `/aruco/debug_image`: imagen de camara con tags dibujados para validar el detector.
-- `/belief`: pose corregida actual del robot.
-- `/poses_guardadas`: nodos/keyframes del grafo.
-- `/trajectory_optimized`: trayectoria corregida completa.
-- `/landmarks`: landmarks ArUco optimizados en frame `map`.
-- `/landmarks_opt`: alias legado de `/landmarks` para configuraciones viejas.
-- `/map`: grilla de ocupacion generada en la segunda pasada.
-
-## Estructura minima
+## Estructura
 
 ```text
-tp_final_ws/
-├── bags/
-│   ├── aruco_estimation/
-│   └── laberinto/
-└── src/tp_slam_aruco/
-    ├── config/
-    ├── launch/
-    └── tp_slam_aruco/
+TP-Final-Rob/
+├── mapas/                         # mapa de referencia usado por Parte B
+├── docs/parte_b/                  # implementación, ejecución y resultados
+├── tp_final_ws/
+│   ├── bags/                      # rosbags de Parte A (no versionados)
+│   └── src/
+│       ├── tp_slam_aruco/         # Parte A
+│       ├── tp_slam_interfaces/    # mensajes ROS compartidos
+│       └── tp_b_navigation/       # Parte B
+└── AGENTS.md                      # contexto técnico para agentes de desarrollo
 ```
 
 ## Requisitos
 
-Asumo que ya tenes ROS 2 funcionando en tu maquina y que `cv_bridge` viene de tu
-instalacion de ROS.
+- ROS 2 Humble y `colcon`.
+- Parte A: `numpy<2`, GTSAM, PyYAML, OpenCV contrib, SciPy y `cv_bridge`.
+- Parte B: Gazebo, TurtleBot3 y el paquete de simulación `turtlebot3_custom_simulation` provisto por la cátedra.
 
-Dependencias Python usadas por este paquete:
+Dependencias Python principales:
 
 ```bash
-pip install "numpy<2" gtsam pyyaml opencv-contrib-python
-python -c "import cv_bridge, cv2, gtsam, numpy; print(numpy.__version__)"
+python3 -m pip install "numpy<2" gtsam pyyaml opencv-contrib-python scipy
 ```
-
-Si `cv_bridge` rompe con `_ARRAY_API not found`, casi seguro estas con NumPy 2.x.
 
 ## Build
 
+Todos los comandos siguientes parten de la raíz del repositorio clonado:
+
 ```bash
-cd /Users/franco/TP-Final-Rob/tp_final_ws
-colcon build --packages-select tp_slam_aruco
-source install/setup.bash
+cd tp_final_ws
+colcon build --packages-select tp_slam_interfaces tp_slam_aruco tp_b_navigation
+source install/setup.bash        # bash
+# source install/setup.zsh       # zsh
 ```
 
-Chequeo minimo del entorno ROS:
+Durante el build, el mapa de `mapas/` se copia al directorio instalado de `tp_b_navigation`. Los launch lo encuentran mediante el índice de paquetes de ROS; no dependen de la ubicación del clon.
+
+## Parte A — generar el mapa
+
+La opción implementada usa dos reproducciones del rosbag.
+
+### Primera pasada: ArUco + Graph SLAM
+
+Terminal 1, desde `tp_final_ws/`:
 
 ```bash
-python -c "import cv_bridge, cv2, gtsam, numpy; print(numpy.__version__)"
-ros2 bag info /Users/franco/TP-Final-Rob/tp_final_ws/bags/laberinto
-ros2 run tp_slam_aruco check_bag_contract /Users/franco/TP-Final-Rob/tp_final_ws/bags/laberinto
-```
-
-## Parte A - 1ra pasada
-
-Terminal 1:
-
-```bash
-cd /Users/franco/TP-Final-Rob/tp_final_ws
 source install/setup.bash
-ros2 bag play /Users/franco/TP-Final-Rob/tp_final_ws/bags/laberinto --clock
+ros2 bag play bags/laberinto --clock
 ```
 
 Terminal 2:
 
 ```bash
-cd /Users/franco/TP-Final-Rob/tp_final_ws
 source install/setup.bash
 ros2 launch tp_slam_aruco parte_a_slam.launch.py \
-  calibration_file:=/Users/franco/TP-Final-Rob/tp_final_ws/src/tp_slam_aruco/config/camera_tb4_0.yaml \
+  calibration_file:="$(pwd)/src/tp_slam_aruco/config/camera_tb4_0.yaml" \
   trajectory_file:=/tmp/trayectoria.json \
   use_bag_tf:=true
 ```
 
-Que deberias ver:
+Al finalizar con `Ctrl+C`, el nodo guarda `/tmp/trayectoria.json`.
 
-- `/aruco_detections`
-- `/aruco/debug_image`
-- `/belief`
-- `/poses_guardadas`
-- `/landmarks`
-- `/trajectory_optimized`
-- TF `map -> odom`
-- RViz abriendose solo, ya sincronizado con `/clock`
-- La imagen de la camara con tags dibujados en el panel inferior izquierdo
-- `/tmp/aruco_detections.csv` creciendo con ids, tvec, distancia, area, error
-  de reproyeccion y razon de rechazo si el tag fue filtrado
-- `/tmp/aruco_geometry_debug.csv` creciendo con `tf_source`, `x_base`, `y_base`,
-  rango medido y residual contra el landmark optimizado disponible
+Salidas principales: `/aruco_detections`, `/belief`, `/poses_guardadas`, `/trajectory_optimized`, `/landmarks` y TF `map → odom`.
 
-Cuando frenes el launch con `Ctrl+C`, se guarda:
-
-```bash
-/tmp/trayectoria.json
-```
-
-Filtros activos por defecto en la primera pasada:
-
-- Solo se publican detecciones ArUco con area >= `250 px`.
-- Se descartan marcadores fuera de `(0.15, 3.0] m` de profundidad.
-- Se descartan poses con error de reproyeccion mayor a `4 px`.
-- El Graph SLAM no crea un landmark nuevo hasta verlo en `3` keyframes.
-- `allowed_marker_ids` queda vacio por defecto. Si sabemos que IDs fisicos hay
-  en el laberinto, conviene pasarlos como whitelist, por ejemplo:
-
-```bash
-ros2 launch tp_slam_aruco parte_a_slam.launch.py \
-  calibration_file:=/Users/franco/TP-Final-Rob/tp_final_ws/src/tp_slam_aruco/config/camera_tb4_0.yaml \
-  trajectory_file:=/tmp/trayectoria.json \
-  use_bag_tf:=true \
-  allowed_marker_ids:=4,7,11,23
-```
-
-## RViz manual (opcional)
-
-Normalmente no hace falta porque `parte_a_slam.launch.py` ya lo abre.
-Si queres levantarlo aparte, usa reloj simulado explicitamente:
-
-```bash
-cd /Users/franco/TP-Final-Rob/tp_final_ws
-source install/setup.bash
-ros2 run rviz2 rviz2 \
-  --ros-args -p use_sim_time:=true \
-  -d /Users/franco/TP-Final-Rob/tp_final_ws/src/tp_slam_aruco/config/rviz_config.rviz
-```
-
-## Parte A - 2da pasada
+### Segunda pasada: grilla de ocupación
 
 Terminal 1:
 
 ```bash
-cd /Users/franco/TP-Final-Rob/tp_final_ws
 source install/setup.bash
-ros2 bag play /Users/franco/TP-Final-Rob/tp_final_ws/bags/laberinto --clock
+ros2 bag play bags/laberinto --clock
 ```
 
 Terminal 2:
 
 ```bash
-cd /Users/franco/TP-Final-Rob/tp_final_ws
 source install/setup.bash
 ros2 launch tp_slam_aruco parte_a_mapa.launch.py \
   trajectory_file:=/tmp/trayectoria.json \
   map_output:=/tmp/mapa
 ```
 
-Salida esperada al cortar con `Ctrl+C`:
+La salida es `/tmp/mapa.pgm` + `/tmp/mapa.yaml`.
+
+Para usar un mapa regenerado como default de Parte B, reemplazá `mapas/map.pgm` y `mapas/map.yaml` y repetí `colcon build --packages-select tp_b_navigation`. Para probarlo sin reemplazar archivos, pasalo directamente con `map_yaml:=/tmp/mapa.yaml`.
+
+## Parte B — navegar dentro del mapa
+
+Parte B se ejecuta en Gazebo. Todos sus nodos usan tiempo simulado.
+
+Terminal 1:
 
 ```bash
-/tmp/mapa.pgm
-/tmp/mapa.yaml
+source tp_final_ws/install/setup.bash
+ros2 launch turtlebot3_custom_simulation custom_casa.launch.py
+# Para probar obstáculos no mapeados:
+# ros2 launch turtlebot3_custom_simulation custom_casa_obs.launch.py
 ```
 
-## Verificacion recomendada
-
-### Bag corto de ArUco
-
-Usalo antes del bag largo para validar calibracion, TF y detecciones:
+Terminal 2:
 
 ```bash
-cd /Users/franco/TP-Final-Rob/tp_final_ws
-source install/setup.bash
-ros2 bag play /Users/franco/TP-Final-Rob/tp_final_ws/bags/aruco_estimation --clock
+source tp_final_ws/install/setup.bash
+ros2 launch tp_b_navigation parte_b.launch.py
 ```
 
-En otra terminal:
+En RViz:
+
+1. Usá **2D Pose Estimate** para publicar `/initialpose`.
+2. Usá **2D Goal Pose** para publicar `/goal_pose`.
+3. El sistema localiza con MCL, publica `/plan`, sigue el recorrido, evita obstáculos nuevos y alcanza la orientación final.
+
+Nodos de Parte B:
+
+- `map_loader`
+- `landmark_publisher`
+- `landmark_sensor`
+- `mcl_localization`
+- `global_planner`
+- `obstacle_monitor`
+- `state_machine`
+
+La guía detallada, incluido el setup alternativo para RoboStack/macOS, está en [`docs/parte_b/02_guia_ejecucion.md`](docs/parte_b/02_guia_ejecucion.md).
+
+## Tests
+
+Con el entorno ROS cargado:
 
 ```bash
-cd /Users/franco/TP-Final-Rob/tp_final_ws
-source install/setup.bash
-ros2 launch tp_slam_aruco parte_a_slam.launch.py \
-  calibration_file:=/Users/franco/TP-Final-Rob/tp_final_ws/src/tp_slam_aruco/config/camera_tb4_0.yaml \
-  trajectory_file:=/tmp/trayectoria_aruco_estimation.json \
-  use_bag_tf:=true
+python3 -m pytest tp_final_ws/src/tp_slam_aruco/test -q
+python3 -m pytest tp_final_ws/src/tp_b_navigation/test -q
 ```
 
-Chequeos utiles:
+El smoke test de Parte A con rosbag se habilita explícitamente:
 
 ```bash
-ros2 topic echo /aruco_detections --once
-ros2 topic echo /aruco_base_debug --once
-ros2 topic echo /landmarks --once
-ros2 run tf2_ros tf2_echo base_link oakd_rgb_camera_optical_frame
-python - <<'PY'
-import csv
-from collections import Counter
-rows=list(csv.DictReader(open('/tmp/aruco_detections.csv')))
-accepted=[r for r in rows if r['accepted'] == '1']
-print('raw rows:', len(rows), 'accepted:', len(accepted))
-print('accepted ids:', sorted(Counter(r['id'] for r in accepted).items()))
-print('rejections:', Counter(r['reason'] for r in rows if r['accepted'] == '0'))
-PY
+RUN_ROS_SMOKE=1 python3 -m pytest tp_final_ws/src/tp_slam_aruco/test/test_ros_smoke.py -q
 ```
 
-Para separar problema de geometria vs Graph SLAM al terminar la primera pasada:
+## Contratos importantes
 
-```bash
-python - <<'PY'
-import csv, statistics
-rows=[r for r in csv.DictReader(open('/tmp/aruco_geometry_debug.csv')) if r['residual_range']]
-res=[abs(float(r['residual_range'])) for r in rows]
-print('rows with residual:', len(rows))
-print('fallback rows:', sum(1 for r in rows if r['tf_source'] == 'fallback'))
-if res:
-    print('abs residual min/median/max:', min(res), statistics.median(res), max(res))
-    print('large residual rows:', sum(1 for v in res if v > 0.4))
-PY
-```
-
-### Tests
-
-Con un entorno ROS completo:
-
-```bash
-cd /Users/franco/TP-Final-Rob/tp_final_ws
-source install/setup.bash
-python -m pytest src/tp_slam_aruco/test -q
-```
-
-El smoke test con rosbag esta apagado por defecto para no correr bags grandes
-en cada test:
-
-```bash
-RUN_ROS_SMOKE=1 python -m pytest src/tp_slam_aruco/test/test_ros_smoke.py -q
-```
-
-## Troubleshooting corto
-
-### No anda TF o RViz queda vacio
-
-Verifica estas dos cosas primero:
-
-```bash
-ros2 bag play /Users/franco/TP-Final-Rob/tp_final_ws/bags/laberinto --clock
-ros2 run tf2_ros tf2_echo base_link oakd_rgb_camera_optical_frame
-```
-
-La 1ra pasada ahora levanta un **TF bridge** para republicar el TF del bag
-(``/tb4_0/tf`` y ``/tb4_0/tf_static``) en los topicos estandar (`/tf`,
-`/tf_static`).
-
-### La geometria sigue mal
-
-- Deja `use_bag_tf:=true`
-- Los extrinsecos numericos quedaron solo como fallback
-- El fallback actual del TB4 grabado en este bag es:
-
-```bash
-camera_tx:=-0.0596 camera_ty:=0.0 camera_yaw:=0.0
-```
-
-### No aparece `trajectory.json`
-
-- Asegurate de cortar el launch con `Ctrl+C`
-- Usa una ruta escribible, por ejemplo `/tmp/trayectoria.json`
-
-### `cv_bridge` rompe al arrancar
-
-```bash
-pip install "numpy<2"
-python -c "import cv_bridge; print('cv_bridge ok')"
-```
-
-## Alcance actual
-
-Este repo esta preparado para correr y depurar **Parte A**.
-
-- **Parte B** y **Parte C** siguen siendo contexto del TP, pero no estan
-  empaquetadas aca como flujos end-to-end con el mismo nivel de soporte.
+- Parte A y Parte B no deben lanzarse simultáneamente con la configuración actual.
+- Ambas etapas pueden publicar `map → odom`, pero en ejecuciones diferentes.
+- `/landmarks` tiene contratos distintos: ArUco optimizados en Parte A y landmarks virtuales conocidos en Parte B.
+- `state_machine` es el único nodo de Parte B autorizado a publicar `/cmd_vel`.
+- Para usar un mapa alternativo: `ros2 launch tp_b_navigation parte_b.launch.py map_yaml:=/ruta/map.yaml`.

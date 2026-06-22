@@ -1,0 +1,10 @@
+std_msgs/Header header
+int32 landmark_id
+float32 range_m
+float32 bearing_rad
+float32 x_base
+float32 y_base
+float32 depth_m
+float32 reprojection_error_px
+bool used_fallback_tf
+string source_frame
