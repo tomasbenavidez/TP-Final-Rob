@@ -7,16 +7,21 @@
 # este Mac (shell zsh + overlay RoboStack) el setup.bash/zsh de colcon falla
 # (errores de compdef / rutas). Además fija CycloneDDS en loopback (ver el .xml).
 #
-# Ajustar estas 3 rutas si la instalación difiere:
-
-CONDA_SH="$HOME/miniforge3/etc/profile.d/conda.sh"
-ROSENV="rosenv"
-WS_PROF="$HOME/ws/install"                                   # overlay del profe (turtlebot3_custom_simulation)
-WS_TPB="$HOME/Documents/GitHub/TP-Final-Rob/tp_final_ws"     # nuestro workspace
-PYVER="python3.11"
-HERE="${0:A:h}"                                              # carpeta de este script
+# Las variables pueden sobrescribirse antes de sourcear el script.
+SCRIPT_PATH="${(%):-%N}"
+HERE="${SCRIPT_PATH:A:h}"
+REPO_ROOT="${HERE:h:h:h}"
+CONDA_SH="${CONDA_SH:-$HOME/miniforge3/etc/profile.d/conda.sh}"
+ROSENV="${ROSENV:-rosenv}"
+WS_PROF="${WS_PROF:-$HOME/ws/install}"  # overlay con turtlebot3_custom_simulation
+WS_TPB="${WS_TPB:-$REPO_ROOT/tp_final_ws}"
+PYVER="${PYVER:-python3.11}"
 
 setopt NULL_GLOB 2>/dev/null || true
+if [ ! -f "$CONDA_SH" ]; then
+  echo "[setup_parte_b] no existe CONDA_SH=$CONDA_SH" >&2
+  return 1
+fi
 source "$CONDA_SH"
 conda activate "$ROSENV"
 

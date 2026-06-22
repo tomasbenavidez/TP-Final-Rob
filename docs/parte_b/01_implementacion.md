@@ -65,7 +65,7 @@ map ──(mcl_localization)──► odom ──(Gazebo)──► base_footprin
   (`occupied_thresh`, `free_thresh`, `negate`) sin depender del stack de lifecycle de nav2.
 - Publica `/map` con QoS **latcheado** (`transient_local`) + re-publicación periódica, para que
   RViz/planner/MCL que arranquen después igual lo reciban.
-- Param: `map_yaml` (default `~/Documents/GitHub/TP-Final-Rob/mapas/map.yaml`), `frame_id=map`.
+- Param: `map_yaml` (default instalado en `share/tp_b_navigation/maps/map.yaml`), `frame_id=map`.
 
 ### 3.2 `landmark_publisher` (Sistema 3: landmarks virtuales)
 - Publica **36 landmarks fijos** en `/landmarks` (`PoseArray`@`map`, latched) + markers verdes.

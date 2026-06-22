@@ -4,6 +4,8 @@ Instrucciones para levantar el ciclo completo de Parte B, qué se ve en cada pas
 usar en **Gazebo** y **RViz**, y qué screenshots faltan. Pensado para correr en el Mac del equipo
 (ROS 2 Humble por RoboStack, env conda `rosenv`).
 
+Salvo que se indique lo contrario, los comandos parten de la raíz del repositorio clonado.
+
 > **Importante (macOS):** preparar el entorno. Dos opciones:
 > - **Recomendada (lo que ya usás):** en tu terminal interactiva normal,
 >   `source install/setup.zsh` **funciona** (los warnings de `compdef` son inofensivos). Sólo
@@ -22,8 +24,8 @@ usar en **Gazebo** y **RViz**, y qué screenshots faltan. Pensado para correr en
 ## 0. Compilar (una vez)
 
 ```bash
-source ~/Documents/GitHub/TP-Final-Rob/docs/parte_b/scripts/setup_parte_b.sh
-cd ~/Documents/GitHub/TP-Final-Rob/tp_final_ws
+source docs/parte_b/scripts/setup_parte_b.sh
+cd tp_final_ws
 colcon build --packages-select tp_b_navigation
 ```
 
@@ -32,7 +34,7 @@ colcon build --packages-select tp_b_navigation
 ## 1. Levantar la simulación de Gazebo (Terminal 1)
 
 ```bash
-source ~/Documents/GitHub/TP-Final-Rob/docs/parte_b/scripts/setup_parte_b.sh
+source docs/parte_b/scripts/setup_parte_b.sh
 # entorno estándar:
 ros2 launch turtlebot3_custom_simulation custom_casa.launch.py
 # con obstáculos no mapeados (para probar la evasión, consigna 1.9):
@@ -57,7 +59,7 @@ ros2 launch turtlebot3_custom_simulation custom_casa.launch.py
 ## 2. Levantar la pila de Parte B (Terminal 2)
 
 ```bash
-source ~/Documents/GitHub/TP-Final-Rob/docs/parte_b/scripts/setup_parte_b.sh
+source docs/parte_b/scripts/setup_parte_b.sh
 ros2 launch tp_b_navigation parte_b.launch.py
 ```
 
@@ -103,7 +105,7 @@ Para ver el estado de la FSM en consola: `ros2 topic echo /nav_state`.
 ## 4. Verificación rápida sin RViz (por si el GUI no abre)
 
 ```bash
-source ~/.../scripts/setup_parte_b.sh
+source docs/parte_b/scripts/setup_parte_b.sh
 ros2 topic echo /nav_state                       # estado de la FSM
 ros2 run tf2_ros tf2_echo map base_footprint     # pose estimada por el MCL
 ros2 topic echo --once /plan nav_msgs/msg/Path   # la ruta planeada

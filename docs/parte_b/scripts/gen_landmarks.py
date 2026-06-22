@@ -1,9 +1,15 @@
-import numpy as np, yaml, math, os
+from pathlib import Path
+
+import numpy as np
+import yaml
+
 from tp_b_navigation.map_loader import _read_pgm
-ypath=os.path.expanduser('~/Documents/GitHub/TP-Final-Rob/mapas/map.yaml')
+
+REPO_ROOT = Path(__file__).resolve().parents[3]
+ypath = REPO_ROOT / 'mapas' / 'map.yaml'
 meta=yaml.safe_load(open(ypath))
 res=float(meta['resolution']); ox,oy=meta['origin'][0],meta['origin'][1]
-img_rel=meta['image']; ipath=img_rel if os.path.isabs(img_rel) else os.path.join(os.path.dirname(ypath),img_rel)
+img_rel=meta['image']; ipath=Path(img_rel) if Path(img_rel).is_absolute() else ypath.parent / img_rel
 W,H,img=_read_pgm(ipath)
 p=img.astype(float)/255.0; occ=(1.0-p)>0.65   # occupied
 occ=np.flipud(occ)  # row0=bottom like OccupancyGrid
@@ -22,7 +28,7 @@ def fps(P,k):
         d=np.minimum(d,np.hypot(P[:,0]-last[0],P[:,1]-last[1]))
         idx.append(int(np.argmax(d)))
     return P[idx]
-np.random.seed(1); 
+np.random.seed(1)
 # start from a central-ish surface point
 sel=fps(pts,36)
 flat=[]
@@ -31,7 +37,7 @@ print("N=",len(sel))
 print(flat)
 # write yaml
 out={'landmark_publisher':{'ros__parameters':{'landmarks':flat}}}
-cfg=os.path.expanduser('~/Documents/GitHub/TP-Final-Rob/tp_final_ws/src/tp_b_navigation/config/landmarks.yaml')
+cfg = REPO_ROOT / 'tp_final_ws' / 'src' / 'tp_b_navigation' / 'config' / 'landmarks.yaml'
 with open(cfg,'w') as f:
     f.write("# Landmarks virtuales (Sistema 3): puntos sobre superficies de pared visibles.\n")
     f.write("# Densificados (~36) para coherencia con la densidad de ArUco real y para romper\n")

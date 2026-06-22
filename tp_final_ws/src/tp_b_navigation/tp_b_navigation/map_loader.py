@@ -12,6 +12,8 @@ import os
 import numpy as np
 import yaml
 
+from ament_index_python.packages import get_package_share_directory
+
 import rclpy
 from rclpy.node import Node
 from rclpy.executors import ExternalShutdownException
@@ -79,10 +81,9 @@ class MapLoader(Node):
     def __init__(self):
         super().__init__('map_loader')
 
-        # Ruta al .yaml del mapa (formato map_server). Default: mapas/map.yaml del repo.
-        default_yaml = os.path.join(
-            os.path.expanduser('~'),
-            'Documents', 'GitHub', 'TP-Final-Rob', 'mapas', 'map.yaml')
+        # Recurso instalado con el paquete; funciona sin conocer la ruta del checkout.
+        package_share = get_package_share_directory('tp_b_navigation')
+        default_yaml = os.path.join(package_share, 'maps', 'map.yaml')
         self.declare_parameter('map_yaml', default_yaml)
         self.declare_parameter('frame_id', 'map')
         self.declare_parameter('publish_period_sec', 2.0)

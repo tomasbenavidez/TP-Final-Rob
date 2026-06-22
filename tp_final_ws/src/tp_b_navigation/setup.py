@@ -3,6 +3,8 @@ import os
 from glob import glob
 
 package_name = 'tp_b_navigation'
+map_files = glob(os.path.abspath(os.path.join(
+    os.path.dirname(__file__), '../../../mapas/map.*')))
 
 setup(
     name=package_name,
@@ -20,6 +22,8 @@ setup(
         # Configuración: params yaml, rviz
         (os.path.join('share', package_name, 'config'),
             glob('config/*')),
+        # Mapa estático usado por los launch de Parte B.
+        (os.path.join('share', package_name, 'maps'), map_files),
     ],
     install_requires=['setuptools'],
     zip_safe=True,
