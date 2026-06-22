@@ -11,6 +11,15 @@ REPO_ROOT = PACKAGE_ROOT.parents[2]
 
 
 class PortableRuntimePathsTest(unittest.TestCase):
+    def test_custom_simulation_assets_do_not_reference_personal_paths(self):
+        simulation_root = REPO_ROOT / "tp_final_ws" / "src" / "turtlebot3_custom_simulation"
+        personal_path = re.compile(r"/(?:Users|home)/[^/]+/")
+
+        for pattern in ("*.world", "*.sdf"):
+            for path in simulation_root.rglob(pattern):
+                with self.subTest(path=path):
+                    self.assertIsNone(personal_path.search(path.read_text(encoding="utf-8")))
+
     def test_runtime_files_do_not_contain_personal_checkout_paths(self):
         files = [
             PACKAGE_ROOT / "launch" / "parte_b.launch.py",
