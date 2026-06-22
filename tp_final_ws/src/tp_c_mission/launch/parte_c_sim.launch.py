@@ -59,8 +59,12 @@ def generate_launch_description():
                         'base_scan', 'base_robot::base_scan']),
     ]
 
+    # NOTA: (1.65, 1.50) caía en una celda DESCONOCIDA del mapa y detrás de una pared de
+    # custom_casa -> el cono quedaba ocluido y en zona no navegable (planner allow_unknown=False),
+    # así que la misión nunca lo veía (NOT_FOUND). Reubicado a un punto LIBRE y mapeado del cuarto
+    # principal, en la dirección +x donde el robot arranca mirando (línea de visión directa).
     cone_specs = [
-        ('red_cone', 'ConeRed', '1.65', '1.50'),
+        ('red_cone', 'ConeRed', '1.50', '0.0'),
         ('yellow_cone', 'ConeYellow', '-1.70', '1.45'),
         ('blue_cone', 'ConeBlue', '1.70', '-2.20'),
     ]
