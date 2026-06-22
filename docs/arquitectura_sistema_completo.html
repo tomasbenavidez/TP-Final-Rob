@@ -40,6 +40,8 @@
     }
     button { font: inherit; }
     button:focus-visible, [tabindex]:focus-visible { outline: 3px solid var(--focus); outline-offset: 3px; }
+    .skip-link { position: fixed; z-index: 20; top: 10px; left: 10px; padding: 9px 13px; color: var(--bg); background: var(--focus); border-radius: 8px; transform: translateY(-160%); }
+    .skip-link:focus { transform: translateY(0); }
     code { color: #caeeeb; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
     .page { width: min(1680px, calc(100% - 32px)); margin: auto; padding: 38px 0 64px; }
     .eyebrow { margin: 0 0 9px; color: var(--a); font: 800 .75rem/1 ui-monospace, monospace; letter-spacing: .15em; text-transform: uppercase; }
@@ -66,7 +68,7 @@
     .control-group { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; padding: 12px; border: 1px solid var(--line); border-radius: 12px; background: var(--panel); }
     .control-group strong { margin-right: 5px; color: var(--muted); font-size: .77rem; letter-spacing: .08em; text-transform: uppercase; }
     .control-group button { padding: 8px 12px; color: var(--ink); border: 1px solid #526b75; border-radius: 999px; background: #10212a; cursor: pointer; }
-    .control-group button[aria-pressed="true"], .control-group button.selected { color: var(--bg); border-color: var(--a); background: var(--a); }
+    .control-group button[aria-pressed="true"], .control-group button.is-active { color: var(--bg); border-color: var(--a); background: var(--a); }
 
     .workspace { display: grid; grid-template-columns: minmax(0, 1fr) 320px; gap: 16px; align-items: start; }
     .panorama, .details { border: 1px solid var(--line); border-radius: 18px; background: rgb(10 24 32 / 94%); box-shadow: var(--shadow); }
@@ -88,8 +90,8 @@
     .node, .artifact, .external { width: 100%; min-width: 0; padding: 11px; color: var(--ink); border: 1px solid; border-radius: 10px; background: #10212a; text-align: left; overflow-wrap: anywhere; }
     .node { cursor: pointer; transition: opacity .18s ease, transform .18s ease, border-color .18s ease; }
     .node:hover { transform: translateY(-2px); }
-    .node.selected { border-color: var(--focus); box-shadow: 0 0 0 2px rgb(255 242 168 / 18%); }
-    .node.muted, .connection.muted, .stage.muted { opacity: .2; }
+    .node.is-active { border-color: var(--focus); box-shadow: 0 0 0 2px rgb(255 242 168 / 18%); }
+    .node.is-muted, .connection.is-muted, .stage.is-muted { opacity: .2; }
     .stage-a .node { border-color: rgb(61 214 198 / 60%); }
     .stage-remap .node { border-color: rgb(229 189 85 / 70%); }
     .stage-b .node { border-color: rgb(255 151 94 / 65%); }
@@ -98,6 +100,7 @@
     .kind { display: block; margin-bottom: 4px; color: var(--muted); font: 800 .61rem/1.2 ui-monospace, monospace; letter-spacing: .1em; text-transform: uppercase; }
     .node b, .artifact b, .external b { display: block; font-size: .83rem; }
     .node small, .artifact small, .external small { display: block; margin-top: 4px; color: var(--muted); font-size: .68rem; }
+    .node-note { margin: -2px 2px 2px; color: var(--muted); font-size: .68rem; }
     .connection { position: relative; min-height: 27px; border-left: 3px solid #8da0a8; margin-left: 17px; padding: 2px 0 2px 13px; color: var(--muted); font: .64rem/1.25 ui-monospace, monospace; }
     .connection::after { content: ""; position: absolute; bottom: -1px; left: -6px; border-top: 8px solid #8da0a8; border-left: 5px solid transparent; border-right: 5px solid transparent; }
     .connection.tf { border-left-style: dashed; }
@@ -152,6 +155,7 @@
   </style>
 </head>
 <body>
+  <a class="skip-link" href="#main-content">Saltar al contenido</a>
   <div class="page">
     <header class="hero">
       <p class="eyebrow">Mapa panorámico · ROS 2</p>
@@ -176,22 +180,22 @@
       </div>
     </section>
 
-    <div class="controls">
-      <nav class="control-group" aria-label="Modo de lectura">
+    <section class="controls" aria-label="Controles del panorama">
+      <div class="control-group" role="group" aria-label="Modo de lectura">
         <strong>Lectura</strong>
         <button type="button" data-mode="concept" aria-pressed="true">Conceptos</button>
         <button type="button" data-mode="ros" aria-pressed="false">Interfaces ROS</button>
-      </nav>
-      <nav class="control-group" aria-label="Recorridos guiados">
+      </div>
+      <div class="control-group" role="group" aria-label="Recorridos guiados">
         <strong>Recorridos</strong>
         <button type="button" data-tour="build-map">Construir mapa</button>
         <button type="button" data-tour="localize">Localizarse</button>
         <button type="button" data-tour="navigate">Navegar</button>
         <button type="button" data-tour="new-obstacle">Obstáculo nuevo</button>
-      </nav>
-    </div>
+      </div>
+    </section>
 
-    <main class="workspace">
+    <main class="workspace" id="main-content">
       <section class="panorama" aria-labelledby="map-title">
         <div class="panorama-head">
           <div><p class="eyebrow">Sistema completo</p><h2 id="map-title">Del rosbag real al movimiento simulado</h2></div>
@@ -212,7 +216,7 @@
               <button class="node" type="button" data-node="graph_slam_node" data-scope="a"><span class="kind">Nodo A1</span><b>graph_slam_node</b><small>optimiza poses y ArUco</small></button>
               <div class="connection file" data-from="graph_slam_node" data-to="trajectory-file"><span data-label="concept">guarda trayectoria corregida</span><span data-label="ros">/trajectory_optimized → trayectoria.json</span></div>
               <div class="artifact"><span class="kind">Entre pasadas</span><b>trayectoria.json</b><small>poses optimizadas por Graph SLAM</small></div>
-              <div class="connection file" data-from="trajectory-file" data-to="occupancy_grid_node"><span data-label="concept">segunda pasada + LIDAR</span><span data-label="ros">tb4_0/scan + tb4_0/odom</span></div>
+              <div class="connection file" data-from="graph_slam_node" data-to="occupancy_grid_node"><span data-label="concept">trayectoria corregida + segunda pasada LIDAR</span><span data-label="ros">trayectoria.json + tb4_0/scan + tb4_0/odom</span></div>
               <button class="node" type="button" data-node="occupancy_grid_node" data-scope="a"><span class="kind">Nodo A2</span><b>occupancy_grid_node</b><small>corrección SLAM + odometría densa</small></button>
               <div class="connection file" data-from="occupancy_grid_node" data-to="real-map"><span data-label="concept">exporta mapa real</span><span data-label="ros">/map + guardado</span></div>
               <div class="artifact"><span class="kind">Mapa real</span><b>map.pgm + map.yaml</b><small>resultado original de Parte A</small></div>
@@ -224,12 +228,13 @@
             <p class="stage-intro">Proceso separado para que la geometría del mapa coincida con el mundo de Gazebo.</p>
             <div class="flow">
               <div class="external"><span class="kind">Simulación</span><b>Gazebo + TurtleBot3</b><small>recorrido de cobertura</small></div>
-              <div class="connection topic" data-from="gazebo-mapping" data-to="sim_mapper"><span data-label="concept">entrega mediciones LIDAR</span><span data-label="ros">/scan</span></div>
-              <div class="connection tf" data-from="gazebo-mapping" data-to="sim_mapper"><span data-label="concept">ubica cada scan en el marco de mapeo</span><span data-label="ros">TF odom ← scan_frame</span></div>
+              <div class="connection topic" data-from="gazebo_sim" data-to="sim_mapper"><span data-label="concept">entrega mediciones LIDAR</span><span data-label="ros">/scan</span></div>
+              <div class="connection tf" data-from="gazebo_sim" data-to="sim_mapper"><span data-label="concept">ubica cada scan en el marco de mapeo</span><span data-label="ros">TF odom ← scan_frame</span></div>
               <button class="node" type="button" data-node="sim_mapper" data-scope="remap"><span class="kind">Nodo de adaptación</span><b>sim_mapper</b><small>reutiliza la lógica de occupancy_grid_node</small></button>
+              <p class="node-note">Su detalle explicará por qué este remapeo no es Graph SLAM.</p>
               <div class="connection file" data-from="sim_mapper" data-to="sim-map-tmp"><span data-label="concept">exporta al cerrar</span><span data-label="ros">map_output:=/tmp/map_sim</span></div>
               <div class="artifact"><span class="kind">Salida temporal</span><b>/tmp/map_sim</b><small>/tmp/map_sim.pgm + /tmp/map_sim.yaml</small></div>
-              <div class="connection file" data-from="sim-map-tmp" data-to="sim-map-installed"><span data-label="concept">validar, copiar e instalar</span><span data-label="ros">mapas/map_sim.* → share/.../maps</span></div>
+              <div class="connection file" data-from="sim_mapper" data-to="map_loader"><span data-label="concept">validar, copiar e instalar para navegación</span><span data-label="ros">mapas/map_sim.* → share/.../maps</span></div>
               <div class="artifact"><span class="kind">Mapa de navegación</span><b>map_sim.pgm + map_sim.yaml</b><small>default instalado de Parte B</small></div>
             </div>
           </section>
@@ -244,17 +249,23 @@
                 <div class="connection topic" data-from="map_loader" data-to="obstacle_monitor"><span data-label="concept">grilla para distinguir paredes conocidas</span><span data-label="ros">/map → obstacle_monitor</span></div>
               </div>
               <button class="node" type="button" data-node="landmark_publisher" data-scope="b"><span class="kind">Nodo B</span><b>landmark_publisher</b><small>36 referencias virtuales conocidas</small></button>
-              <div class="connection topic" data-from="landmark_publisher" data-to="landmark_sensor"><span data-label="concept">landmarks del mundo</span><span data-label="ros">/landmarks · PoseArray</span></div>
+              <div class="fanout" aria-label="Distribución de /landmarks a sus suscriptores">
+                <div class="connection topic" data-from="landmark_publisher" data-to="landmark_sensor"><span data-label="concept">referencias para simular observaciones</span><span data-label="ros">/landmarks → landmark_sensor</span></div>
+                <div class="connection topic" data-from="landmark_publisher" data-to="mcl_localization"><span data-label="concept">referencias para localizarse</span><span data-label="ros">/landmarks → mcl_localization</span></div>
+              </div>
               <button class="node" type="button" data-node="landmark_sensor" data-scope="b"><span class="kind">Nodo B</span><b>landmark_sensor</b><small>range/bearing, FOV, oclusión y ruido</small></button>
               <div class="connection topic" data-from="landmark_sensor" data-to="mcl_localization"><span data-label="concept">observaciones simuladas</span><span data-label="ros">/observed_landmarks</span></div>
               <button class="node" type="button" data-node="mcl_localization" data-scope="b"><span class="kind">Nodo B</span><b>mcl_localization</b><small>filtro de partículas + TF global</small></button>
               <div class="connection tf" data-from="mcl_localization" data-to="global_planner"><span data-label="concept">pose global estimada</span><span data-label="ros">map → odom → base_footprint</span></div>
               <button class="node" type="button" data-node="global_planner" data-scope="b"><span class="kind">Nodo B</span><b>global_planner</b><small>A* 8-conexo, inflado y simplificación</small></button>
-              <div class="connection topic" data-from="global_planner" data-to="state_machine"><span data-label="concept">ruta y estado del plan</span><span data-label="ros">/plan_request ↔ /plan · /plan_status</span></div>
+              <div class="fanout" aria-label="Solicitud y respuesta de planificación">
+                <div class="connection topic" data-from="state_machine" data-to="global_planner"><span data-label="concept">solicita una ruta</span><span data-label="ros">/plan_request</span></div>
+                <div class="connection topic" data-from="global_planner" data-to="state_machine"><span data-label="concept">devuelve ruta y estado</span><span data-label="ros">/plan · /plan_status</span></div>
+              </div>
               <button class="node" type="button" data-node="obstacle_monitor" data-scope="b"><span class="kind">Nodo B</span><b>obstacle_monitor</b><small>compara /scan con /map</small></button>
               <div class="connection topic" data-from="obstacle_monitor" data-to="state_machine"><span data-label="concept">alerta de obstáculo nuevo</span><span data-label="ros">/obstacle_detected</span></div>
               <button class="node" type="button" data-node="state_machine" data-scope="b"><span class="kind">Nodo B</span><b>state_machine</b><small>seguimiento, evasión, alineación y replan</small></button>
-              <div class="connection topic" data-from="state_machine" data-to="gazebo-robot"><span data-label="concept">convierte decisión en movimiento</span><span data-label="ros">/cmd_vel</span></div>
+              <div class="connection topic" data-from="state_machine" data-to="gazebo_sim"><span data-label="concept">convierte decisión en movimiento</span><span data-label="ros">/cmd_vel</span></div>
               <div class="external"><span class="kind">Operación</span><b>RViz + TurtleBot3 en Gazebo</b><small>/initialpose · /goal_pose · /scan · /odom</small></div>
             </div>
           </section>

@@ -46,9 +46,21 @@ class ArchitectureParser(HTMLParser):
         self.remote_resources = []
         self.has_detail_region = False
         self.live_detail_regions = 0
+        self.ids = []
+        self.connections = []
 
     def handle_starttag(self, tag, attrs):
         attributes = dict(attrs)
+        if "id" in attributes:
+            self.ids.append(attributes["id"])
+        if "data-from" in attributes and "data-to" in attributes:
+            self.connections.append(
+                (
+                    attributes["data-from"],
+                    attributes["data-to"],
+                    frozenset(attributes.get("class", "").split()),
+                )
+            )
         if "data-node" in attributes:
             self.nodes.add(attributes["data-node"])
         if "data-mode" in attributes:
@@ -245,6 +257,56 @@ class ArchitectureHtmlTest(unittest.TestCase):
                 self.html,
                 flags=re.IGNORECASE,
             )
+        )
+
+    def test_no_duplicate_ids(self):
+        duplicates = {
+            id_: count
+            for id_, count in Counter(self.parser.ids).items()
+            if count > 1
+        }
+        self.assertEqual({}, duplicates)
+
+    def test_documents_required_data_flow(self):
+        required_pairs = {
+            ("aruco_detector_node", "graph_slam_node"),
+            ("graph_slam_node", "occupancy_grid_node"),
+            ("gazebo_sim", "sim_mapper"),
+            ("sim_mapper", "map_loader"),
+            ("map_loader", "global_planner"),
+            ("map_loader", "obstacle_monitor"),
+            ("landmark_publisher", "landmark_sensor"),
+            ("landmark_publisher", "mcl_localization"),
+            ("landmark_sensor", "mcl_localization"),
+            ("state_machine", "global_planner"),
+            ("global_planner", "state_machine"),
+            ("obstacle_monitor", "state_machine"),
+            ("state_machine", "gazebo_sim"),
+        }
+        actual_pairs = {(from_, to) for from_, to, _ in self.parser.connections}
+        self.assertEqual(set(), required_pairs - actual_pairs)
+
+        request_edges = [
+            connection
+            for connection in self.parser.connections
+            if connection[:2] == ("state_machine", "global_planner")
+        ]
+        response_edges = [
+            connection
+            for connection in self.parser.connections
+            if connection[:2] == ("global_planner", "state_machine")
+        ]
+        self.assertEqual(1, len(request_edges))
+        self.assertEqual(1, len(response_edges))
+        self.assertIn("topic", request_edges[0][2])
+        self.assertIn("topic", response_edges[0][2])
+        self.assertRegex(
+            self.html,
+            r'data-from="state_machine" data-to="global_planner"[^>]*>[^<]*(?:<[^>]+>[^<]*</[^>]+>)*.*?/plan_request',
+        )
+        self.assertRegex(
+            self.html,
+            r'data-from="global_planner" data-to="state_machine"[^>]*>[^<]*(?:<[^>]+>[^<]*</[^>]+>)*.*?/plan · /plan_status',
         )
 
 
