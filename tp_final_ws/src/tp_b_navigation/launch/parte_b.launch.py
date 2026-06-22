@@ -24,9 +24,11 @@ from launch_ros.actions import Node
 
 def generate_launch_description():
     pkg_share = get_package_share_directory('tp_b_navigation')
+    # Default: mapa del entorno SIMULADO generado con sim_mapper (ver 05_remapeo_sim.md).
+    # Para volver al mapa del profe: map_yaml:=.../mapas/map.yaml
     default_map = os.path.join(
         os.path.expanduser('~'),
-        'Documents', 'GitHub', 'TP-Final-Rob', 'mapas', 'map.yaml')
+        'Documents', 'GitHub', 'TP-Final-Rob', 'mapas', 'map_sim.yaml')
     landmarks_yaml = os.path.join(pkg_share, 'config', 'landmarks.yaml')
     rviz_config = os.path.join(pkg_share, 'config', 'parte_b.rviz')
 

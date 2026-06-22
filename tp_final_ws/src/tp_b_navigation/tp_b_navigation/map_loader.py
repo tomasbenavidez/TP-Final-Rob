@@ -80,9 +80,11 @@ class MapLoader(Node):
         super().__init__('map_loader')
 
         # Ruta al .yaml del mapa (formato map_server). Default: mapas/map.yaml del repo.
+        # Default: mapa del entorno SIMULADO generado con sim_mapper (Parte A re-mapeada
+        # en Gazebo). El map.yaml del profe queda como fallback histórico.
         default_yaml = os.path.join(
             os.path.expanduser('~'),
-            'Documents', 'GitHub', 'TP-Final-Rob', 'mapas', 'map.yaml')
+            'Documents', 'GitHub', 'TP-Final-Rob', 'mapas', 'map_sim.yaml')
         self.declare_parameter('map_yaml', default_yaml)
         self.declare_parameter('frame_id', 'map')
         self.declare_parameter('publish_period_sec', 2.0)

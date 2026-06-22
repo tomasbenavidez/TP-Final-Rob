@@ -1,6 +1,9 @@
-import numpy as np, yaml, math, os
+import numpy as np, yaml, math, os, sys
 from tp_b_navigation.map_loader import _read_pgm
-ypath=os.path.expanduser('~/Documents/GitHub/TP-Final-Rob/mapas/map.yaml')
+# Mapa de entrada: por defecto el mapa del entorno SIMULADO generado con sim_mapper
+# (map_sim.yaml). Se puede pasar otro por argumento.
+_default=os.path.expanduser('~/Documents/GitHub/TP-Final-Rob/mapas/map_sim.yaml')
+ypath=os.path.expanduser(sys.argv[1]) if len(sys.argv)>1 else _default
 meta=yaml.safe_load(open(ypath))
 res=float(meta['resolution']); ox,oy=meta['origin'][0],meta['origin'][1]
 img_rel=meta['image']; ipath=img_rel if os.path.isabs(img_rel) else os.path.join(os.path.dirname(ypath),img_rel)

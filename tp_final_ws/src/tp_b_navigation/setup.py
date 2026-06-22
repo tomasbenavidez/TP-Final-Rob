@@ -31,6 +31,7 @@ setup(
         'console_scripts': [
             # 'nombre = paquete.modulo:main'  ->  ros2 run tp_b_navigation <nombre>
             'map_loader = tp_b_navigation.map_loader:main',
+            'sim_mapper = tp_b_navigation.sim_mapper:main',
             'landmark_publisher = tp_b_navigation.landmark_publisher:main',
             'landmark_sensor = tp_b_navigation.landmark_sensor:main',
             'mcl_localization = tp_b_navigation.mcl_localization:main',
