@@ -103,6 +103,8 @@
     .connection.tf { border-left-style: dashed; }
     .connection.file { border-left-style: dotted; border-left-color: var(--remap); }
     .connection.file::after { border-top-color: var(--remap); }
+    .fanout { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; padding: 4px 0; }
+    .fanout .connection { margin-left: 12px; }
     [data-label="ros"] { display: none; }
     body[data-mode="ros"] [data-label="concept"] { display: none; }
     body[data-mode="ros"] [data-label="ros"] { display: inline; }
@@ -222,7 +224,8 @@
             <p class="stage-intro">Proceso separado para que la geometría del mapa coincida con el mundo de Gazebo.</p>
             <div class="flow">
               <div class="external"><span class="kind">Simulación</span><b>Gazebo + TurtleBot3</b><small>recorrido de cobertura</small></div>
-              <div class="connection topic" data-from="gazebo-mapping" data-to="sim_mapper"><span data-label="concept">scans y pose simulada</span><span data-label="ros">/scan + /odom</span></div>
+              <div class="connection topic" data-from="gazebo-mapping" data-to="sim_mapper"><span data-label="concept">entrega mediciones LIDAR</span><span data-label="ros">/scan</span></div>
+              <div class="connection tf" data-from="gazebo-mapping" data-to="sim_mapper"><span data-label="concept">ubica cada scan en el marco de mapeo</span><span data-label="ros">TF odom ← scan_frame</span></div>
               <button class="node" type="button" data-node="sim_mapper" data-scope="remap"><span class="kind">Nodo de adaptación</span><b>sim_mapper</b><small>reutiliza la lógica de occupancy_grid_node</small></button>
               <div class="connection file" data-from="sim_mapper" data-to="sim-map-tmp"><span data-label="concept">exporta al cerrar</span><span data-label="ros">map_output:=/tmp/map_sim</span></div>
               <div class="artifact"><span class="kind">Salida temporal</span><b>/tmp/map_sim</b><small>/tmp/map_sim.pgm + /tmp/map_sim.yaml</small></div>
@@ -236,7 +239,10 @@
             <p class="stage-intro">Con el mapa estático instalado, MCL estima la pose, A* planifica y la FSM gobierna el movimiento.</p>
             <div class="flow">
               <button class="node" type="button" data-node="map_loader" data-scope="b"><span class="kind">Nodo B</span><b>map_loader</b><small>carga map_sim.yaml y publica /map latched</small></button>
-              <div class="connection topic" data-from="map_loader" data-to="landmark_publisher"><span data-label="concept">mapa estático de referencia</span><span data-label="ros">/map</span></div>
+              <div class="fanout" aria-label="Distribución de /map a sus suscriptores">
+                <div class="connection topic" data-from="map_loader" data-to="global_planner"><span data-label="concept">grilla para planificar rutas</span><span data-label="ros">/map → global_planner</span></div>
+                <div class="connection topic" data-from="map_loader" data-to="obstacle_monitor"><span data-label="concept">grilla para distinguir paredes conocidas</span><span data-label="ros">/map → obstacle_monitor</span></div>
+              </div>
               <button class="node" type="button" data-node="landmark_publisher" data-scope="b"><span class="kind">Nodo B</span><b>landmark_publisher</b><small>36 referencias virtuales conocidas</small></button>
               <div class="connection topic" data-from="landmark_publisher" data-to="landmark_sensor"><span data-label="concept">landmarks del mundo</span><span data-label="ros">/landmarks · PoseArray</span></div>
               <button class="node" type="button" data-node="landmark_sensor" data-scope="b"><span class="kind">Nodo B</span><b>landmark_sensor</b><small>range/bearing, FOV, oclusión y ruido</small></button>
@@ -285,7 +291,7 @@
         <article class="invariant" data-invariant="cmd-vel-owner"><strong>Autoridad de movimiento</strong><code>state_machine</code> es el único productor de /cmd_vel dentro de Parte B.</article>
         <article class="invariant" data-invariant="landmark-truth-frame"><strong>Sensor sin realimentación</strong><code>landmark_sensor</code> usa odom como verdad simulada, no la estimación de MCL.</article>
         <article class="invariant" data-invariant="map-handoff"><strong>Persistencia entre etapas</strong>El mapa estático es el único artefacto persistente compartido: originalmente <code>map.pgm/map.yaml</code>; en la adaptación simulada, <code>map_sim.pgm/map_sim.yaml</code>.</article>
-        <article class="invariant" data-invariant="simulation-remapping"><strong>Adaptación, no SLAM</strong>El remapeo del entorno simulado reutiliza la grilla de ocupación con <code>/scan</code> + <code>/odom</code>; <code>sim_mapper</code> no ejecuta Graph SLAM.</article>
+        <article class="invariant" data-invariant="simulation-remapping"><strong>Adaptación, no SLAM</strong>El remapeo del entorno simulado reutiliza la grilla de ocupación: recibe <code>/scan</code> y obtiene su pose con TF <code>odom ← scan_frame</code>; <code>sim_mapper</code> no se suscribe a <code>/odom</code> ni ejecuta Graph SLAM.</article>
       </div>
     </section>
 
