@@ -58,6 +58,40 @@ norte/sur; la **puerta al sur está en el corredor ESTE, x≈+2.4**):
 
 **Exportar:** `Ctrl+C` en **T2** → `sim_mapper` escribe `mapas/map_sim.pgm` + `mapas/map_sim.yaml`.
 
+## Re-mapear más tarde (y si hay que reconectar algo)
+
+**Para volver a mapear** (mismas 3 terminales que arriba):
+
+```bash
+# T1
+ros2 launch turtlebot3_custom_simulation custom_casa.launch.py
+# T2
+ros2 launch tp_b_navigation sim_mapping.launch.py
+# T3
+ros2 run teleop_twist_keyboard teleop_twist_keyboard
+#   manejar la casa  ->  Ctrl+C en T2  ->  SOBRESCRIBE mapas/map_sim.{pgm,yaml}
+```
+
+**¿Parte B funciona directo después? SÍ, sin reconectar nada.** `map_loader.py` y
+`parte_b.launch.py` ya apuntan a `mapas/map_sim.yaml` por default, y ese archivo se lee **por ruta
+en runtime** (no es parte del build de colcon). Entonces, apenas re-mapeás, el próximo
+`ros2 launch tp_b_navigation parte_b.launch.py` ya carga el mapa nuevo. **Cero pasos extra.**
+
+**Landmarks:** si re-mapeás **el mismo mundo** (`custom_casa`, robot spawneando en el origen), la
+geometría no cambia → los landmarks siguen cayendo sobre las paredes → **NO hace falta
+regenerarlos**. Sólo regenerar si cambiás de mundo o querés otra densidad:
+
+```bash
+python3 docs/parte_b/scripts/gen_landmarks.py                          # lee mapas/map_sim.yaml
+cd tp_final_ws && colcon build --packages-select tp_b_navigation       # landmarks SÍ necesita rebuild
+```
+
+> Diferencia clave: **el mapa NO necesita rebuild** (se lee por ruta absoluta en runtime); **los
+> landmarks SÍ** (son `config/` del paquete, se copian al `install/` con `colcon build`).
+
+> Recordá el **gotcha de DDS** (ver más abajo): si tras varias corridas la FSM queda en LOCALIZING,
+> matá todo + `ros2 daemon stop && ros2 daemon start` + relanzá. No es el mapa.
+
 ## Cómo Parte B usa el mapa generado
 
 `map_loader` y `parte_b.launch.py` aceptan el argumento `map_yaml`. Para navegar con el mapa
