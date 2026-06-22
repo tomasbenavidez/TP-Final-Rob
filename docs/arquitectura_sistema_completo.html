@@ -1,0 +1,312 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Arquitectura completa · TP Final de Robótica Autónoma</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #071118;
+      --panel: #0d1b24;
+      --panel-2: #122631;
+      --ink: #edf8f7;
+      --muted: #9cb1b6;
+      --line: #36505c;
+      --a: #3dd6c6;
+      --a-soft: #0e3e3e;
+      --remap: #e5bd55;
+      --remap-soft: #3d331b;
+      --b: #ff975e;
+      --b-soft: #47291f;
+      --future: #aaa2c8;
+      --focus: #fff2a8;
+      --shadow: 0 18px 45px rgb(0 0 0 / 28%);
+    }
+
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      color: var(--ink);
+      background:
+        linear-gradient(rgb(67 116 130 / 7%) 1px, transparent 1px),
+        linear-gradient(90deg, rgb(67 116 130 / 7%) 1px, transparent 1px),
+        radial-gradient(circle at 18% 0%, rgb(61 214 198 / 12%), transparent 32rem),
+        var(--bg);
+      background-size: 28px 28px, 28px 28px, auto, auto;
+      font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      line-height: 1.5;
+    }
+    button { font: inherit; }
+    button:focus-visible, [tabindex]:focus-visible { outline: 3px solid var(--focus); outline-offset: 3px; }
+    code { color: #caeeeb; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+    .page { width: min(1680px, calc(100% - 32px)); margin: auto; padding: 38px 0 64px; }
+    .eyebrow { margin: 0 0 9px; color: var(--a); font: 800 .75rem/1 ui-monospace, monospace; letter-spacing: .15em; text-transform: uppercase; }
+    h1, h2, h3, p { margin-top: 0; }
+    h1 { max-width: 1080px; margin-bottom: 18px; font-size: clamp(2.3rem, 6vw, 5.7rem); line-height: .96; letter-spacing: -.06em; }
+    h2 { letter-spacing: -.03em; }
+    .hero { padding: 22px 0 34px; border-bottom: 1px solid var(--line); }
+    .intro { max-width: 780px; color: var(--muted); font-size: 1.08rem; }
+    .status-row { display: flex; flex-wrap: wrap; gap: 9px; margin-top: 22px; }
+    .status { padding: 7px 11px; border: 1px solid; border-radius: 999px; font: 750 .78rem/1.2 ui-monospace, monospace; }
+    .status.a { color: var(--a); border-color: var(--a); }
+    .status.b { color: var(--b); border-color: var(--b); }
+    .status.c { color: var(--future); border-color: var(--future); }
+
+    .mental-model { padding: 30px 0 20px; }
+    .mental-model > p { max-width: 760px; color: var(--muted); }
+    .capabilities { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-top: 18px; }
+    .capability { position: relative; padding: 17px; border: 1px solid var(--line); border-radius: 12px; background: rgb(13 27 36 / 84%); }
+    .capability:not(:last-child)::after { content: "→"; position: absolute; z-index: 2; top: 50%; right: -18px; color: var(--a); font-weight: 900; transform: translateY(-50%); }
+    .capability b { display: block; color: var(--a); font-size: 1.02rem; }
+    .capability small { color: var(--muted); }
+
+    .controls { display: grid; grid-template-columns: minmax(240px, .7fr) minmax(420px, 1.3fr); gap: 12px; padding: 20px 0; }
+    .control-group { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; padding: 12px; border: 1px solid var(--line); border-radius: 12px; background: var(--panel); }
+    .control-group strong { margin-right: 5px; color: var(--muted); font-size: .77rem; letter-spacing: .08em; text-transform: uppercase; }
+    .control-group button { padding: 8px 12px; color: var(--ink); border: 1px solid #526b75; border-radius: 999px; background: #10212a; cursor: pointer; }
+    .control-group button[aria-pressed="true"], .control-group button.selected { color: var(--bg); border-color: var(--a); background: var(--a); }
+
+    .workspace { display: grid; grid-template-columns: minmax(0, 1fr) 320px; gap: 16px; align-items: start; }
+    .panorama, .details { border: 1px solid var(--line); border-radius: 18px; background: rgb(10 24 32 / 94%); box-shadow: var(--shadow); }
+    .panorama { padding: 18px; overflow: hidden; }
+    .panorama-head { display: flex; align-items: end; justify-content: space-between; gap: 20px; margin-bottom: 16px; }
+    .panorama-head h2 { margin-bottom: 4px; }
+    .panorama-head p { max-width: 620px; margin: 0; color: var(--muted); font-size: .86rem; }
+    .system-map { display: grid; grid-template-columns: 1.05fr .75fr 1.25fr; gap: 12px; align-items: stretch; }
+    .stage { min-width: 0; padding: 15px; border: 1px solid; border-radius: 14px; }
+    .stage-a { border-color: rgb(61 214 198 / 55%); background: linear-gradient(145deg, rgb(14 62 62 / 85%), rgb(7 25 30 / 92%)); }
+    .stage-remap { border-color: rgb(229 189 85 / 65%); background: linear-gradient(145deg, rgb(61 51 27 / 92%), rgb(9 31 39 / 94%)); }
+    .stage-b { border-color: rgb(255 151 94 / 55%); background: linear-gradient(145deg, rgb(71 41 31 / 84%), rgb(15 28 35 / 94%)); }
+    .stage h3 { margin-bottom: 4px; font-size: 1.08rem; }
+    .stage-a h3 { color: var(--a); }
+    .stage-remap h3 { color: var(--remap); }
+    .stage-b h3 { color: var(--b); }
+    .stage-intro { min-height: 58px; color: var(--muted); font-size: .76rem; }
+    .flow { display: grid; gap: 8px; }
+    .node, .artifact, .external { width: 100%; min-width: 0; padding: 11px; color: var(--ink); border: 1px solid; border-radius: 10px; background: #10212a; text-align: left; overflow-wrap: anywhere; }
+    .node { cursor: pointer; transition: opacity .18s ease, transform .18s ease, border-color .18s ease; }
+    .node:hover { transform: translateY(-2px); }
+    .node.selected { border-color: var(--focus); box-shadow: 0 0 0 2px rgb(255 242 168 / 18%); }
+    .node.muted, .connection.muted, .stage.muted { opacity: .2; }
+    .stage-a .node { border-color: rgb(61 214 198 / 60%); }
+    .stage-remap .node { border-color: rgb(229 189 85 / 70%); }
+    .stage-b .node { border-color: rgb(255 151 94 / 65%); }
+    .artifact { border-color: #8b7d50; background: #272718; }
+    .external { border-color: #617681; background: #17242b; }
+    .kind { display: block; margin-bottom: 4px; color: var(--muted); font: 800 .61rem/1.2 ui-monospace, monospace; letter-spacing: .1em; text-transform: uppercase; }
+    .node b, .artifact b, .external b { display: block; font-size: .83rem; }
+    .node small, .artifact small, .external small { display: block; margin-top: 4px; color: var(--muted); font-size: .68rem; }
+    .connection { position: relative; min-height: 27px; border-left: 3px solid #8da0a8; margin-left: 17px; padding: 2px 0 2px 13px; color: var(--muted); font: .64rem/1.25 ui-monospace, monospace; }
+    .connection::after { content: ""; position: absolute; bottom: -1px; left: -6px; border-top: 8px solid #8da0a8; border-left: 5px solid transparent; border-right: 5px solid transparent; }
+    .connection.tf { border-left-style: dashed; }
+    .connection.file { border-left-style: dotted; border-left-color: var(--remap); }
+    .connection.file::after { border-top-color: var(--remap); }
+    [data-label="ros"] { display: none; }
+    body[data-mode="ros"] [data-label="concept"] { display: none; }
+    body[data-mode="ros"] [data-label="ros"] { display: inline; }
+    .handoff { grid-column: 1 / -1; display: grid; grid-template-columns: 1fr 1fr; gap: 10px; padding: 13px; border: 1px solid #655f49; border-radius: 12px; background: #181d1d; }
+    .handoff p { margin: 0; color: var(--muted); font-size: .75rem; }
+
+    .details { position: sticky; top: 16px; padding: 20px; }
+    .details .scope { color: var(--a); font: 800 .68rem/1 ui-monospace, monospace; letter-spacing: .12em; text-transform: uppercase; }
+    .details h2 { margin: 9px 0; font-size: 1.25rem; }
+    .details p { color: var(--muted); font-size: .85rem; }
+    .legend { display: grid; gap: 9px; margin-top: 19px; padding-top: 16px; border-top: 1px solid var(--line); color: var(--muted); font-size: .72rem; }
+    .legend span { display: flex; align-items: center; gap: 9px; }
+    .line-key { width: 34px; border-top: 3px solid #8da0a8; }
+    .line-key.tf { border-top-style: dashed; }
+    .line-key.file { border-top-style: dotted; border-color: var(--remap); }
+
+    .invariants { margin-top: 18px; padding: 22px; border: 1px solid var(--line); border-radius: 18px; background: var(--panel); }
+    .invariants-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 9px; }
+    .invariant { padding: 12px; border-left: 3px solid var(--a); background: var(--panel-2); color: var(--muted); font-size: .76rem; }
+    .invariant strong { display: block; margin-bottom: 4px; color: var(--ink); }
+    .future { position: relative; margin-top: 18px; padding: 24px; border: 1px solid var(--future); border-radius: 18px; overflow: hidden; background: repeating-linear-gradient(135deg, rgb(170 162 200 / 12%) 0 10px, rgb(13 27 36 / 88%) 10px 20px); }
+    .future p { max-width: 760px; margin: 0; color: var(--muted); }
+    .badge { display: inline-block; margin-bottom: 10px; padding: 5px 9px; border: 1px solid var(--future); color: var(--future); font: 900 .7rem/1 ui-monospace, monospace; letter-spacing: .12em; }
+    footer { padding: 24px 2px 0; color: var(--muted); font-size: .74rem; }
+
+    @media (max-width: 1120px) {
+      .workspace { grid-template-columns: 1fr; }
+      .details { position: static; }
+      .system-map { grid-template-columns: 1fr 1fr; }
+      .stage-b { grid-column: 1 / -1; }
+    }
+    @media (max-width: 900px) {
+      .page { width: min(100% - 20px, 680px); padding-top: 20px; }
+      .capabilities, .controls, .system-map, .invariants-grid, .handoff { grid-template-columns: 1fr; }
+      .capability:not(:last-child)::after { content: "↓"; top: auto; right: 50%; bottom: -20px; transform: translateX(50%); }
+      .stage-b { grid-column: auto; }
+      .panorama-head { align-items: start; flex-direction: column; }
+      .panorama { padding: 12px; }
+      .status-row { align-items: flex-start; flex-direction: column; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      html { scroll-behavior: auto; }
+      *, *::before, *::after { scroll-behavior: auto !important; transition-duration: .01ms !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; }
+    }
+  </style>
+</head>
+<body>
+  <div class="page">
+    <header class="hero">
+      <p class="eyebrow">Mapa panorámico · ROS 2</p>
+      <h1>Cómo un robot transforma sensores en movimiento</h1>
+      <p class="intro">Una lectura completa del sistema: primero construye referencias del mundo, después estima dónde está y finalmente convierte un objetivo en comandos seguros de movimiento.</p>
+      <div class="status-row" aria-label="Estado de las partes">
+        <span class="status a">Parte A · IMPLEMENTADA</span>
+        <span class="status b">Parte B · IMPLEMENTADA</span>
+        <span class="status c">Parte C · FUTURA / NO IMPLEMENTADA</span>
+      </div>
+    </header>
+
+    <section class="mental-model" aria-labelledby="mental-title">
+      <p class="eyebrow">Modelo mental</p>
+      <h2 id="mental-title">Percibir → Estimar → Decidir → Actuar</h2>
+      <p>Cada etapa puede leerse por su capacidad robótica o, activando el modo ROS, por los tópicos, TF y archivos que la conectan.</p>
+      <div class="capabilities">
+        <article class="capability" data-capability="perceive"><b>Percibir</b><small>Cámara, ArUco y LIDAR observan el entorno.</small></article>
+        <article class="capability" data-capability="estimate"><b>Estimar</b><small>Graph SLAM, grillas y MCL construyen estado.</small></article>
+        <article class="capability" data-capability="decide"><b>Decidir</b><small>A* y la máquina de estados eligen una acción.</small></article>
+        <article class="capability" data-capability="act"><b>Actuar</b><small>La velocidad comandada mueve el TurtleBot.</small></article>
+      </div>
+    </section>
+
+    <div class="controls">
+      <nav class="control-group" aria-label="Modo de lectura">
+        <strong>Lectura</strong>
+        <button type="button" data-mode="concept" aria-pressed="true">Conceptos</button>
+        <button type="button" data-mode="ros" aria-pressed="false">Interfaces ROS</button>
+      </nav>
+      <nav class="control-group" aria-label="Recorridos guiados">
+        <strong>Recorridos</strong>
+        <button type="button" data-tour="build-map">Construir mapa</button>
+        <button type="button" data-tour="localize">Localizarse</button>
+        <button type="button" data-tour="navigate">Navegar</button>
+        <button type="button" data-tour="new-obstacle">Obstáculo nuevo</button>
+      </nav>
+    </div>
+
+    <main class="workspace">
+      <section class="panorama" aria-labelledby="map-title">
+        <div class="panorama-head">
+          <div><p class="eyebrow">Sistema completo</p><h2 id="map-title">Del rosbag real al movimiento simulado</h2></div>
+          <p>Las etapas son secuenciales. El remapeo de Gazebo adapta el mapa al mundo simulado antes de lanzar navegación.</p>
+        </div>
+
+        <div class="system-map">
+          <section class="stage stage-a" data-scope="a" aria-labelledby="part-a-title">
+            <h3 id="part-a-title">Parte A · mundo real</h3>
+            <p class="stage-intro">Un rosbag del TurtleBot4 alimenta Graph SLAM y una segunda pasada crea el mapa real.</p>
+            <div class="flow">
+              <div class="external"><span class="kind">Fuente</span><b>rosbag real · TurtleBot4</b><small>cámara, TF, odometría, LIDAR y /clock</small></div>
+              <div class="connection topic" data-from="real-bag" data-to="tf_bridge_node"><span data-label="concept">recupera transformaciones</span><span data-label="ros">tb4_0/tf + tb4_0/tf_static</span></div>
+              <button class="node" type="button" data-node="tf_bridge_node" data-scope="a"><span class="kind">Nodo A1</span><b>tf_bridge_node</b><small>republica TF grabados</small></button>
+              <div class="connection tf" data-from="tf_bridge_node" data-to="aruco_detector_node"><span data-label="concept">ubica cámara y base</span><span data-label="ros">/tf · /tf_static</span></div>
+              <button class="node" type="button" data-node="aruco_detector_node" data-scope="a"><span class="kind">Nodo A1</span><b>aruco_detector_node</b><small>detecta y filtra marcadores</small></button>
+              <div class="connection topic" data-from="aruco_detector_node" data-to="graph_slam_node"><span data-label="concept">observaciones de landmarks</span><span data-label="ros">/aruco_detections</span></div>
+              <button class="node" type="button" data-node="graph_slam_node" data-scope="a"><span class="kind">Nodo A1</span><b>graph_slam_node</b><small>optimiza poses y ArUco</small></button>
+              <div class="connection file" data-from="graph_slam_node" data-to="trajectory-file"><span data-label="concept">guarda trayectoria corregida</span><span data-label="ros">/trajectory_optimized → trayectoria.json</span></div>
+              <div class="artifact"><span class="kind">Entre pasadas</span><b>trayectoria.json</b><small>poses optimizadas por Graph SLAM</small></div>
+              <div class="connection file" data-from="trajectory-file" data-to="occupancy_grid_node"><span data-label="concept">segunda pasada + LIDAR</span><span data-label="ros">tb4_0/scan + tb4_0/odom</span></div>
+              <button class="node" type="button" data-node="occupancy_grid_node" data-scope="a"><span class="kind">Nodo A2</span><b>occupancy_grid_node</b><small>corrección SLAM + odometría densa</small></button>
+              <div class="connection file" data-from="occupancy_grid_node" data-to="real-map"><span data-label="concept">exporta mapa real</span><span data-label="ros">/map + guardado</span></div>
+              <div class="artifact"><span class="kind">Mapa real</span><b>map.pgm + map.yaml</b><small>resultado original de Parte A</small></div>
+            </div>
+          </section>
+
+          <section class="stage stage-remap" data-scope="remap" aria-labelledby="remap-title">
+            <h3 id="remap-title">Adaptación · remapeo simulado</h3>
+            <p class="stage-intro">Proceso separado para que la geometría del mapa coincida con el mundo de Gazebo.</p>
+            <div class="flow">
+              <div class="external"><span class="kind">Simulación</span><b>Gazebo + TurtleBot3</b><small>recorrido de cobertura</small></div>
+              <div class="connection topic" data-from="gazebo-mapping" data-to="sim_mapper"><span data-label="concept">scans y pose simulada</span><span data-label="ros">/scan + /odom</span></div>
+              <button class="node" type="button" data-node="sim_mapper" data-scope="remap"><span class="kind">Nodo de adaptación</span><b>sim_mapper</b><small>reutiliza la lógica de occupancy_grid_node</small></button>
+              <div class="connection file" data-from="sim_mapper" data-to="sim-map-tmp"><span data-label="concept">exporta al cerrar</span><span data-label="ros">map_output:=/tmp/map_sim</span></div>
+              <div class="artifact"><span class="kind">Salida temporal</span><b>/tmp/map_sim</b><small>/tmp/map_sim.pgm + /tmp/map_sim.yaml</small></div>
+              <div class="connection file" data-from="sim-map-tmp" data-to="sim-map-installed"><span data-label="concept">validar, copiar e instalar</span><span data-label="ros">mapas/map_sim.* → share/.../maps</span></div>
+              <div class="artifact"><span class="kind">Mapa de navegación</span><b>map_sim.pgm + map_sim.yaml</b><small>default instalado de Parte B</small></div>
+            </div>
+          </section>
+
+          <section class="stage stage-b" data-scope="b" aria-labelledby="part-b-title">
+            <h3 id="part-b-title">Parte B · localizar y navegar</h3>
+            <p class="stage-intro">Con el mapa estático instalado, MCL estima la pose, A* planifica y la FSM gobierna el movimiento.</p>
+            <div class="flow">
+              <button class="node" type="button" data-node="map_loader" data-scope="b"><span class="kind">Nodo B</span><b>map_loader</b><small>carga map_sim.yaml y publica /map latched</small></button>
+              <div class="connection topic" data-from="map_loader" data-to="landmark_publisher"><span data-label="concept">mapa estático de referencia</span><span data-label="ros">/map</span></div>
+              <button class="node" type="button" data-node="landmark_publisher" data-scope="b"><span class="kind">Nodo B</span><b>landmark_publisher</b><small>36 referencias virtuales conocidas</small></button>
+              <div class="connection topic" data-from="landmark_publisher" data-to="landmark_sensor"><span data-label="concept">landmarks del mundo</span><span data-label="ros">/landmarks · PoseArray</span></div>
+              <button class="node" type="button" data-node="landmark_sensor" data-scope="b"><span class="kind">Nodo B</span><b>landmark_sensor</b><small>range/bearing, FOV, oclusión y ruido</small></button>
+              <div class="connection topic" data-from="landmark_sensor" data-to="mcl_localization"><span data-label="concept">observaciones simuladas</span><span data-label="ros">/observed_landmarks</span></div>
+              <button class="node" type="button" data-node="mcl_localization" data-scope="b"><span class="kind">Nodo B</span><b>mcl_localization</b><small>filtro de partículas + TF global</small></button>
+              <div class="connection tf" data-from="mcl_localization" data-to="global_planner"><span data-label="concept">pose global estimada</span><span data-label="ros">map → odom → base_footprint</span></div>
+              <button class="node" type="button" data-node="global_planner" data-scope="b"><span class="kind">Nodo B</span><b>global_planner</b><small>A* 8-conexo, inflado y simplificación</small></button>
+              <div class="connection topic" data-from="global_planner" data-to="state_machine"><span data-label="concept">ruta y estado del plan</span><span data-label="ros">/plan_request ↔ /plan · /plan_status</span></div>
+              <button class="node" type="button" data-node="obstacle_monitor" data-scope="b"><span class="kind">Nodo B</span><b>obstacle_monitor</b><small>compara /scan con /map</small></button>
+              <div class="connection topic" data-from="obstacle_monitor" data-to="state_machine"><span data-label="concept">alerta de obstáculo nuevo</span><span data-label="ros">/obstacle_detected</span></div>
+              <button class="node" type="button" data-node="state_machine" data-scope="b"><span class="kind">Nodo B</span><b>state_machine</b><small>seguimiento, evasión, alineación y replan</small></button>
+              <div class="connection topic" data-from="state_machine" data-to="gazebo-robot"><span data-label="concept">convierte decisión en movimiento</span><span data-label="ros">/cmd_vel</span></div>
+              <div class="external"><span class="kind">Operación</span><b>RViz + TurtleBot3 en Gazebo</b><small>/initialpose · /goal_pose · /scan · /odom</small></div>
+            </div>
+          </section>
+
+          <div class="handoff">
+            <p><strong>Flujo original A → B:</strong> <code>map.pgm + map.yaml</code> son el mapa real que produce Parte A y el contrato secuencial previsto por la consigna.</p>
+            <p><strong>Adaptación vigente en simulación:</strong> el mundo Gazebo se remapea con <code>sim_mapper</code>; su <code>map_sim.yaml</code> instalado es el default actual de Parte B.</p>
+          </div>
+        </div>
+      </section>
+
+      <aside class="details" data-detail-region aria-live="polite" aria-atomic="true">
+        <span class="scope">Detalle del sistema</span>
+        <h2>Explorá el panorama</h2>
+        <p>Elegí un nodo para consultar su propósito, entradas y salidas. Los recorridos guiados destacarán los caminos completos de datos.</p>
+        <div class="legend" aria-label="Leyenda de conexiones">
+          <span><i class="line-key"></i> Tópico ROS · línea sólida</span>
+          <span><i class="line-key tf"></i> Transformación TF · línea discontinua</span>
+          <span><i class="line-key file"></i> Archivo persistido · línea punteada</span>
+          <span>Colores: <b style="color:var(--a)">Parte A</b> · <b style="color:var(--remap)">remapeo</b> · <b style="color:var(--b)">Parte B</b></span>
+        </div>
+      </aside>
+    </main>
+
+    <section class="invariants" aria-labelledby="invariants-title">
+      <p class="eyebrow">Contratos que no deben mezclarse</p>
+      <h2 id="invariants-title">Nueve invariantes de integración</h2>
+      <div class="invariants-grid">
+        <article class="invariant" data-invariant="execution-separation"><strong>Ejecuciones separadas</strong>Parte A, adaptación y Parte B no se ejecutan simultáneamente.</article>
+        <article class="invariant" data-invariant="alternate-map-odom"><strong>TF global exclusivo</strong>Graph SLAM y MCL son productores alternativos de <code>map → odom</code>.</article>
+        <article class="invariant" data-invariant="landmark-contracts"><strong>Dos contratos /landmarks</strong>Parte A publica <code>MarkerArray</code>; Parte B publica <code>PoseArray</code>.</article>
+        <article class="invariant" data-invariant="frame-contracts"><strong>Frames por plataforma</strong>Parte A usa <code>base_link</code>; Parte B usa <code>base_footprint</code>.</article>
+        <article class="invariant" data-invariant="dense-odometry"><strong>Segunda pasada real</strong>La corrección SLAM se compone con odometría densa; no se interpola simplemente entre keyframes.</article>
+        <article class="invariant" data-invariant="cmd-vel-owner"><strong>Autoridad de movimiento</strong><code>state_machine</code> es el único productor de /cmd_vel dentro de Parte B.</article>
+        <article class="invariant" data-invariant="landmark-truth-frame"><strong>Sensor sin realimentación</strong><code>landmark_sensor</code> usa odom como verdad simulada, no la estimación de MCL.</article>
+        <article class="invariant" data-invariant="map-handoff"><strong>Persistencia entre etapas</strong>El mapa estático es el único artefacto persistente compartido: originalmente <code>map.pgm/map.yaml</code>; en la adaptación simulada, <code>map_sim.pgm/map_sim.yaml</code>.</article>
+        <article class="invariant" data-invariant="simulation-remapping"><strong>Adaptación, no SLAM</strong>El remapeo del entorno simulado reutiliza la grilla de ocupación con <code>/scan</code> + <code>/odom</code>; <code>sim_mapper</code> no ejecuta Graph SLAM.</article>
+      </div>
+    </section>
+
+    <section class="stage future" aria-labelledby="part-c-title">
+      <span class="badge">NO IMPLEMENTADO</span>
+      <h2 id="part-c-title">Parte C · intención futura</h2>
+      <p>Despliegue sobre el robot real y misión de percepción activa. Esta zona expresa solamente la dirección futura; todavía no define nodos, tópicos ni contratos.</p>
+    </section>
+
+    <footer>Arquitectura derivada del código y la documentación integrada del repositorio. Sin dependencias externas.</footer>
+  </div>
+
+  <script>
+    document.querySelectorAll('[data-mode]').forEach((button) => {
+      button.addEventListener('click', () => {
+        document.body.dataset.mode = button.dataset.mode;
+        document.querySelectorAll('[data-mode]').forEach((item) => {
+          item.setAttribute('aria-pressed', String(item === button));
+        });
+      });
+    });
+  </script>
+</body>
+</html>
