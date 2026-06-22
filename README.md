@@ -5,7 +5,8 @@ Implementación ROS 2 del flujo completo del trabajo final:
 1. **Parte A — SLAM y mapeo:** procesa un rosbag real del TurtleBot4, estima la trayectoria con Graph SLAM y ArUco, y genera una grilla de ocupación.
 2. **Parte B — navegación autónoma:** carga un mapa estático, localiza el TurtleBot3 simulado con MCL y landmarks virtuales, planifica con A* y ejecuta el recorrido mediante una máquina de estados.
 
-Las partes se ejecutan por separado. El artefacto que las conecta es el mapa `map.yaml` + `map.pgm`.
+Las partes se ejecutan por separado. Parte B usa por defecto el mapa simulado
+`map_sim.yaml` + `map_sim.pgm`; el mapa `map.yaml` + `map.pgm` de Parte A queda disponible.
 
 ## Estructura
 

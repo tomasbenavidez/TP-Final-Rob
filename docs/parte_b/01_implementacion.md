@@ -29,7 +29,7 @@ ROS 2 Humble). **No se tocó nada de Parte A.**
 
 | Nodo | Ejecutable | Entradas | Salidas |
 |---|---|---|---|
-| `map_loader` | `map_loader` | `mapas/map.yaml` | `/map` (`OccupancyGrid`, latched) |
+| `map_loader` | `map_loader` | `mapas/map_sim.yaml` | `/map` (`OccupancyGrid`, latched) |
 | `landmark_publisher` | `landmark_publisher` | param `landmarks` | `/landmarks` (`PoseArray`@map, latched), `/landmarks_markers` |
 | `landmark_sensor` | `landmark_sensor` | `/scan`, `/landmarks`, TF | `/observed_landmarks` (`PoseArray`), markers |
 | `mcl_localization` | `mcl_localization` | `/odom`, `/observed_landmarks`, `/initialpose` | `/mcl_pose`, `/particlecloud`, **TF `map→odom`** |
@@ -61,11 +61,11 @@ map ──(mcl_localization)──► odom ──(Gazebo)──► base_footprin
 ## 3. Detalle por nodo
 
 ### 3.1 `map_loader` (consigna: cargar el mapa de Parte A)
-- Parsea `map.yaml` + `map.pgm` (P5/P2) replicando la semántica **trinary** de `nav2_map_server`
+- Parsea `map_sim.yaml` + `map_sim.pgm` (P5/P2) replicando la semántica **trinary** de `nav2_map_server`
   (`occupied_thresh`, `free_thresh`, `negate`) sin depender del stack de lifecycle de nav2.
 - Publica `/map` con QoS **latcheado** (`transient_local`) + re-publicación periódica, para que
   RViz/planner/MCL que arranquen después igual lo reciban.
-- Param: `map_yaml` (default instalado en `share/tp_b_navigation/maps/map.yaml`), `frame_id=map`.
+- Param: `map_yaml` (default instalado en `share/tp_b_navigation/maps/map_sim.yaml`), `frame_id=map`.
 
 ### 3.2 `landmark_publisher` (Sistema 3: landmarks virtuales)
 - Publica **36 landmarks fijos** en `/landmarks` (`PoseArray`@`map`, latched) + markers verdes.

@@ -1,4 +1,5 @@
 from pathlib import Path
+import sys
 
 import numpy as np
 import yaml
@@ -6,7 +7,10 @@ import yaml
 from tp_b_navigation.map_loader import _read_pgm
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
-ypath = REPO_ROOT / 'mapas' / 'map.yaml'
+# Mapa de entrada: por defecto el mapa del entorno SIMULADO generado con sim_mapper
+# (map_sim.yaml). Se puede pasar otro por argumento.
+ypath = (Path(sys.argv[1]).expanduser() if len(sys.argv) > 1
+         else REPO_ROOT / 'mapas' / 'map_sim.yaml')
 meta=yaml.safe_load(open(ypath))
 res=float(meta['resolution']); ox,oy=meta['origin'][0],meta['origin'][1]
 img_rel=meta['image']; ipath=Path(img_rel) if Path(img_rel).is_absolute() else ypath.parent / img_rel

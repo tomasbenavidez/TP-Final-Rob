@@ -83,7 +83,7 @@ class MapLoader(Node):
 
         # Recurso instalado con el paquete; funciona sin conocer la ruta del checkout.
         package_share = get_package_share_directory('tp_b_navigation')
-        default_yaml = os.path.join(package_share, 'maps', 'map.yaml')
+        default_yaml = os.path.join(package_share, 'maps', 'map_sim.yaml')
         self.declare_parameter('map_yaml', default_yaml)
         self.declare_parameter('frame_id', 'map')
         self.declare_parameter('publish_period_sec', 2.0)

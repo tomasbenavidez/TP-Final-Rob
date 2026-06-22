@@ -15,7 +15,9 @@ class PortableRuntimePathsTest(unittest.TestCase):
         files = [
             PACKAGE_ROOT / "launch" / "parte_b.launch.py",
             PACKAGE_ROOT / "launch" / "parte_b_localization.launch.py",
+            PACKAGE_ROOT / "launch" / "sim_mapping.launch.py",
             PACKAGE_ROOT / "tp_b_navigation" / "map_loader.py",
+            PACKAGE_ROOT / "tp_b_navigation" / "sim_mapper.py",
         ]
         for path in files:
             text = path.read_text(encoding="utf-8")
@@ -26,7 +28,8 @@ class PortableRuntimePathsTest(unittest.TestCase):
     def test_setup_installs_map_assets_in_package_share(self):
         setup = (PACKAGE_ROOT / "setup.py").read_text(encoding="utf-8")
         self.assertIn("os.path.join('share', package_name, 'maps')", setup)
-        self.assertIn("mapas/map.*", setup)
+        self.assertIn("glob('../../../mapas/*.pgm')", setup)
+        self.assertIn("glob('../../../mapas/*.yaml')", setup)
 
     def test_setup_data_file_sources_are_relative_for_colcon(self):
         captured = {}
@@ -47,7 +50,7 @@ class PortableRuntimePathsTest(unittest.TestCase):
             if destination.endswith("/maps"):
                 map_sources.extend(sources)
 
-        self.assertEqual({"map.pgm", "map.yaml"}, {
+        self.assertEqual({"map.pgm", "map.yaml", "map_sim.pgm", "map_sim.yaml"}, {
             Path(source).name for source in map_sources
         })
         for source in map_sources:
@@ -55,16 +58,26 @@ class PortableRuntimePathsTest(unittest.TestCase):
                 self.assertFalse(os.path.isabs(source))
 
     def test_runtime_defaults_resolve_package_share(self):
-        files = [
+        map_sim_files = [
             PACKAGE_ROOT / "launch" / "parte_b.launch.py",
-            PACKAGE_ROOT / "launch" / "parte_b_localization.launch.py",
             PACKAGE_ROOT / "tp_b_navigation" / "map_loader.py",
+        ]
+        for path in map_sim_files:
+            text = path.read_text(encoding="utf-8")
+            with self.subTest(path=path):
+                self.assertIn("get_package_share_directory", text)
+                self.assertIn("'maps', 'map_sim.yaml'", text)
+
+    def test_sim_mapping_defaults_to_tmp_and_remains_configurable(self):
+        files = [
+            PACKAGE_ROOT / "launch" / "sim_mapping.launch.py",
+            PACKAGE_ROOT / "tp_b_navigation" / "sim_mapper.py",
         ]
         for path in files:
             text = path.read_text(encoding="utf-8")
             with self.subTest(path=path):
-                self.assertIn("get_package_share_directory", text)
-                self.assertIn("'maps', 'map.yaml'", text)
+                self.assertIn("/tmp/map_sim", text)
+                self.assertIn("map_output", text)
 
     def test_package_declares_ament_index_runtime_dependency(self):
         manifest = (PACKAGE_ROOT / "package.xml").read_text(encoding="utf-8")
@@ -77,6 +90,7 @@ class PortableDocumentationPathsTest(unittest.TestCase):
             REPO_ROOT / "README.md",
             REPO_ROOT / "docs" / "parte_b" / "01_implementacion.md",
             REPO_ROOT / "docs" / "parte_b" / "02_guia_ejecucion.md",
+            REPO_ROOT / "docs" / "parte_b" / "05_remapeo_sim.md",
             REPO_ROOT / "docs" / "parte_b" / "scripts" / "setup_parte_b.sh",
             REPO_ROOT / "docs" / "parte_b" / "scripts" / "gen_landmarks.py",
         ]
