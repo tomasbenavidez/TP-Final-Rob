@@ -124,6 +124,7 @@ class ArchitectureHtmlTest(unittest.TestCase):
             "global_planner",
             "obstacle_monitor",
             "state_machine",
+            "sim_mapper",
         }
         self.assertEqual(expected, self.parser.nodes)
 
@@ -134,6 +135,9 @@ class ArchitectureHtmlTest(unittest.TestCase):
             "trayectoria.json",
             "map.pgm",
             "map.yaml",
+            "map_sim.pgm",
+            "map_sim.yaml",
+            "/tmp/map_sim",
             "/observed_landmarks",
             "/initialpose",
             "/goal_pose",
@@ -200,6 +204,7 @@ class ArchitectureHtmlTest(unittest.TestCase):
             "cmd-vel-owner",
             "landmark-truth-frame",
             "map-handoff",
+            "simulation-remapping",
         }
         self.assertEqual(expected_invariants, set(self.parser.invariants))
         self.assertEqual(
@@ -218,6 +223,7 @@ class ArchitectureHtmlTest(unittest.TestCase):
             "único productor de /cmd_vel",
             "usa odom como verdad simulada",
             "único artefacto persistente compartido",
+            "remapeo del entorno simulado",
         )
         for invariant in required_text:
             with self.subTest(invariant=invariant):
