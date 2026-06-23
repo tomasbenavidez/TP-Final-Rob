@@ -50,7 +50,11 @@ class ParteCContractsTest(unittest.TestCase):
         setup = (PACKAGE_ROOT / 'setup.py').read_text()
         rviz = PACKAGE_ROOT / 'config' / 'parte_c_bag.rviz'
         self.assertIn("DeclareLaunchArgument('launch_rviz'", launch)
+        self.assertIn("DeclareLaunchArgument('bag_path'", launch)
+        self.assertIn("DeclareLaunchArgument('play_bag'", launch)
         self.assertIn("default_value='true'", launch)
+        self.assertIn("ros2', 'bag', 'play'", launch)
+        self.assertIn("'--clock'", launch)
         self.assertIn("package='rviz2'", launch)
         self.assertIn('parte_c_bag.rviz', launch)
         self.assertIn("glob('config/*.rviz')", setup)

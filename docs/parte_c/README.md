@@ -49,13 +49,11 @@ frontiers candidatos y la pose confirmada del cono.
 
 ```bash
 ros2 launch tp_c_mission parte_c_bag.launch.py \
-  rgb_topic:=/rgb/image_raw \
-  depth_topic:=/depth/image_raw \
-  camera_info_topic:=/rgb/camera_info
+  bag_path:=tp_final_ws/bags/laberinto_conos
 ```
 
 Los umbrales iniciales están en `config/parte_c.yaml`; deben calibrarse contra el bag sin convertirlos en constantes del código.
-El perfil de bag abre por defecto RViz en `odom`, con TF, LIDAR (`/tb4_0/scan`),
+El perfil de bag reproduce `bag_path` con `--clock` y abre por defecto RViz en `odom`, con TF, LIDAR (`/tb4_0/scan`),
 odometría con traza (`/tb4_0/odom`), pose confirmada del cono, imagen debug y máscara.
 El mapa (`/map`) y el plan (`/plan`) quedan cargados pero desactivados, porque un rosbag
 de visión puro puede no traer navegación activa.
@@ -63,7 +61,8 @@ de visión puro puede no traer navegación activa.
 Para correr sólo los nodos de percepción, sin GUI:
 
 ```bash
-ros2 launch tp_c_mission parte_c_bag.launch.py launch_rviz:=false
+ros2 launch tp_c_mission parte_c_bag.launch.py \
+  bag_path:=tp_final_ws/bags/laberinto_conos launch_rviz:=false
 ```
 
 ### TurtleBot4 real
