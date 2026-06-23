@@ -37,6 +37,10 @@ class ConeDetector(Node):
             'hue_low': 10, 'hue_high': 170,
             'min_saturation': 100, 'min_value': 70,
             'morphology_radius': 1,
+            # Validación geométrica 3D para descartar distractores (consigna 1.2):
+            # el rojo del HospitalBot es indistinguible por color/forma, sí por geometría.
+            'cone_height_tol_m': 0.13,   # |altura_real - cono| permitido (cono medido ~0.31 m)
+            'max_base_height_m': 0.20,   # z máx de la base en 'map' para estar apoyada en el piso
         }
         for name, value in defaults.items():
             self.declare_parameter(name, value)
@@ -56,6 +60,8 @@ class ConeDetector(Node):
             int(get('min_saturation')), int(get('min_value')),
         )
         self.morphology_radius = int(get('morphology_radius'))
+        self.cone_height_tol = float(get('cone_height_tol_m'))
+        self.max_base_height = float(get('max_base_height_m'))
         self.tracker = ConeTracker(
             required_hits=int(get('required_hits')),
             window_size=int(get('window_size')),
@@ -131,6 +137,17 @@ class ConeDetector(Node):
         )
         if distance is None:
             return
+        # --- Validación geométrica 3D: descartar distractores rojos (consigna 1.2) ---
+        # El rojo del HospitalBot es indistinguible por color/forma, pero su geometría no.
+        # (1) Altura real implícita ~ altura del cono (sólo confiable con depth real).
+        if source == 'depth':
+            real_height = distance * region.height / k[4]
+            if abs(real_height - self.cone_height) > self.cone_height_tol:
+                self.get_logger().info(
+                    f'Descarto rojo no-cono: altura real {real_height:.2f} m '
+                    f'(cono {self.cone_height:.2f}±{self.cone_height_tol:.2f}).',
+                    throttle_duration_sec=2.0)
+                return
         camera_point = pixel_to_camera(
             confirmed[0], confirmed[1], distance, k[0], k[4], k[2], k[5])
         try:
@@ -141,6 +158,25 @@ class ConeDetector(Node):
                                    throttle_duration_sec=2.0)
             return
         map_point = _transform_point(camera_point, transform)
+        # (2) Base apoyada en el piso (z≈0 en 'map'): el cono se para en el suelo,
+        #     la cara roja del HospitalBot está elevada. Usa el tercio inferior de la región.
+        if source == 'depth':
+            base_row = int(rows.max())
+            band = rows >= base_row - max(2, region.height // 5)
+            base_depths = depth_values[band]
+            base_depths = base_depths[np.isfinite(base_depths)
+                                      & (base_depths > self.min_depth)
+                                      & (base_depths < self.max_depth)]
+            if base_depths.size:
+                base_cam = pixel_to_camera(
+                    float(cols[band].mean()), float(base_row),
+                    float(np.median(base_depths)), k[0], k[4], k[2], k[5])
+                base_z = _transform_point(base_cam, transform)[2]
+                if abs(base_z) > self.max_base_height:
+                    self.get_logger().info(
+                        f'Descarto rojo no-cono: base a z={base_z:.2f} m '
+                        f'(no apoyada en el piso).', throttle_duration_sec=2.0)
+                    return
         output = PoseWithCovarianceStamped()
         output.header.stamp = msg.header.stamp
         output.header.frame_id = self.global_frame

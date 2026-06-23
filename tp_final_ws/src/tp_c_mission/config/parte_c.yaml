@@ -13,6 +13,9 @@ red_cone_detector:
     min_depth_m: 0.20
     max_depth_m: 5.0
     max_depth_age: 0.20
+    # Validación geométrica 3D (filtrado de distractores, p. ej. la cara roja del HospitalBot):
+    cone_height_tol_m: 0.13   # |altura_real - cono| permitido (cono medido ~0.31 m)
+    max_base_height_m: 0.20   # z máx de la base en 'map' para considerarla apoyada en el piso
 
 mission_manager:
   ros__parameters:
