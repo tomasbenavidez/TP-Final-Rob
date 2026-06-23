@@ -12,7 +12,7 @@ dentro de un cono frontal y a corta distancia, se proyecta el punto al frame `ma
 Si hay suficientes puntos "nuevos" cerca y al frente, se publica /obstacle_detected=True.
 
 Entradas: /scan, /map (latcheado), TF map->base_frame.
-Salida:   /obstacle_detected (std_msgs/Bool).
+Salidas:  /obstacle_detected (std_msgs/Bool), /dynamic_obstacles (OccupancyGrid).
 """
 
 import math
@@ -30,6 +30,7 @@ from nav_msgs.msg import OccupancyGrid
 from std_msgs.msg import Bool
 from tf2_ros import Buffer, TransformListener
 
+from tp_b_navigation.dynamic_obstacles import mark_dynamic_obstacles, same_static_occupancy
 from tp_b_navigation.utils import yaw_from_quaternion
 
 
@@ -40,12 +41,14 @@ class ObstacleMonitor(Node):
         self.declare_parameter('danger_dist', 0.45)     # alcance de alerta (m)
         self.declare_parameter('cone_halfangle', 0.6)   # semicono frontal (rad) ~34°
         self.declare_parameter('min_points', 3)         # puntos nuevos para disparar
+        self.declare_parameter('dynamic_inflation_radius', 0.08)
         self.declare_parameter('global_frame', 'map')
         self.declare_parameter('base_frame', 'base_footprint')
 
         self.danger = float(self.get_parameter('danger_dist').value)
         self.cone = float(self.get_parameter('cone_halfangle').value)
         self.min_pts = int(self.get_parameter('min_points').value)
+        self.dynamic_radius = float(self.get_parameter('dynamic_inflation_radius').value)
         self.global_frame = self.get_parameter('global_frame').value
         self.base_frame = self.get_parameter('base_frame').value
 
@@ -54,6 +57,7 @@ class ObstacleMonitor(Node):
         self.ox = self.oy = 0.0
         self.W = self.H = 0
         self.occ = None  # bool [H,W] ocupado en el mapa
+        self.dynamic = None
 
         qos_latched = QoSProfile(
             depth=1, history=HistoryPolicy.KEEP_LAST,
@@ -64,6 +68,8 @@ class ObstacleMonitor(Node):
         self.create_subscription(LaserScan, '/scan', self.scan_cb,
                                  qos_profile_sensor_data)
         self.pub = self.create_publisher(Bool, '/obstacle_detected', 10)
+        self.dynamic_pub = self.create_publisher(
+            OccupancyGrid, '/dynamic_obstacles', qos_latched)
 
         self.tf_buffer = Buffer()
         self.tf_listener = TransformListener(self.tf_buffer, self)
@@ -78,7 +84,12 @@ class ObstacleMonitor(Node):
         self.oy = msg.info.origin.position.y
         self.W = msg.info.width
         self.H = msg.info.height
-        self.occ = (np.array(msg.data, dtype=np.int16).reshape(self.H, self.W) == 100)
+        occ = (np.array(msg.data, dtype=np.int16).reshape(self.H, self.W) == 100)
+        if same_static_occupancy(self.occ, occ):
+            return
+        self.occ = occ
+        self.dynamic = np.zeros((self.H, self.W), dtype=bool)
+        self._publish_dynamic()
 
     def scan_cb(self, scan: LaserScan):
         if self.occ is None:
@@ -123,16 +134,26 @@ class ObstacleMonitor(Node):
         rows = ((my - self.oy) / self.res).astype(int)
         inside = (rows >= 0) & (rows < self.H) & (cols >= 0) & (cols < self.W)
 
-        new_pts = 0
-        for rr, cc in zip(rows[inside], cols[inside]):
-            # ¿la celda (y un pequeño vecindario) NO es pared conocida? -> obstáculo nuevo
-            r0, r1 = max(0, rr - 1), min(self.H, rr + 2)
-            c0, c1 = max(0, cc - 1), min(self.W, cc + 2)
-            if not self.occ[r0:r1, c0:c1].any():
-                new_pts += 1
+        inflation_cells = max(1, int(math.ceil(self.dynamic_radius / self.res)))
+        changed, new_pts = mark_dynamic_obstacles(
+            self.dynamic, self.occ, rows[inside], cols[inside], inflation_cells)
 
         detected = new_pts >= self.min_pts
+        if changed:
+            self._publish_dynamic()
         self.pub.publish(Bool(data=bool(detected)))
+
+    def _publish_dynamic(self):
+        if self.map is None or self.dynamic is None:
+            return
+        msg = OccupancyGrid()
+        msg.header.frame_id = self.global_frame
+        msg.header.stamp = self.get_clock().now().to_msg()
+        msg.info = self.map.info
+        data = np.zeros((self.H, self.W), dtype=np.int8)
+        data[self.dynamic] = 100
+        msg.data = data.reshape(-1).astype(int).tolist()
+        self.dynamic_pub.publish(msg)
 
 
 def main(args=None):

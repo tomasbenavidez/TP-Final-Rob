@@ -126,6 +126,9 @@ MCL con landmarks **conocidos y fijos** (a diferencia de FastSLAM del tp5, acá 
   frame `map` (con la TF del MCL) y consulta la celda: si el mapa la marca **libre** y el LIDAR ve
   algo ahí → **obstáculo nuevo**. Si la celda es pared conocida → se ignora.
 - Si hay ≥ `min_points=3` puntos nuevos → publica `/obstacle_detected=True`.
+- Además conserva esos puntos en `/dynamic_obstacles` (`OccupancyGrid` en `map`) con inflación
+  compacta (`dynamic_inflation_radius=0.08 m`, disco euclídeo), para que el siguiente pedido de A*
+  los trate como ocupados sin clausurar todo el pasillo.
 
 ### 3.7 `state_machine` (FSM + control — consigna 1.6, 1.7, 1.8, 1.11)
 Máquina de estados (idéntica al diagrama de `04_...md`):

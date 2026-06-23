@@ -1,9 +1,13 @@
 """Política de exploración: utilidad esperada menos costo de la acción."""
 
 from dataclasses import dataclass
+import hashlib
 import math
 
 import numpy as np
+
+
+_NEIGHBORS_4 = ((-1, 0), (1, 0), (0, -1), (0, 1))
 
 
 @dataclass(frozen=True)
@@ -65,6 +69,25 @@ class CoverageBelief:
         return 1.0 if count == 0 else float((self.observed & free).sum() / count)
 
 
+def map_signature(data, resolution, origin_x, origin_y):
+    values = np.asarray(data, dtype=np.int16)
+    digest = hashlib.blake2b(values.tobytes(), digest_size=16).hexdigest()
+    return (
+        int(values.shape[0]), int(values.shape[1]),
+        round(float(resolution), 9),
+        round(float(origin_x), 9), round(float(origin_y), 9),
+        digest,
+    )
+
+
+def observed_free_points(planner, coverage):
+    rows, cols = np.where(coverage.observed & ~planner.blocked)
+    return [
+        planner.cell_to_world((row, col))
+        for row, col in zip(rows.tolist(), cols.tolist())
+    ]
+
+
 def expected_landmark_fraction(pose, landmarks, planner, fov, max_range):
     if not landmarks:
         return 0.0
@@ -124,3 +147,78 @@ def select_approach_pose(planner, robot_xy, cone_xy, standoff=0.55, samples=16):
         if best is None or score < best[0]:
             best = score, pose, path
     return None if best is None else (best[1], best[2])
+
+
+def frontier_cells(planner, observed):
+    """Celdas libres no observadas que limitan con espacio libre ya observado."""
+    observed = np.asarray(observed, dtype=bool)
+    free = ~planner.blocked
+    frontiers = set()
+    rows, cols = np.where(free & ~observed)
+    for row, col in zip(rows.tolist(), cols.tolist()):
+        for dr, dc in _NEIGHBORS_4:
+            neighbor = (row + dr, col + dc)
+            if planner.inside(neighbor) and free[neighbor] and observed[neighbor]:
+                frontiers.add((row, col))
+                break
+    return frontiers
+
+
+def select_frontier_action(
+    planner, coverage, robot_xy, candidate_poses, fov, max_range,
+    exhausted_cells=None, max_debug=12,
+):
+    """Elige una vista alcanzable que mire hacia la frontera observado/no observado."""
+    frontiers = frontier_cells(planner, coverage.observed)
+    if not frontiers:
+        return None, []
+    exhausted_cells = set() if exhausted_cells is None else set(exhausted_cells)
+    diagonal = math.hypot(planner.width, planner.height) * planner.resolution
+    max_visible_cells = max(
+        1.0,
+        float(fov) * float(max_range) ** 2 / (2.0 * planner.resolution ** 2),
+    )
+    candidates = []
+    debug = []
+    for pose in candidate_poses:
+        cell = planner.world_to_cell(*pose[:2])
+        if (not planner.inside(cell) or planner.blocked[cell] or
+                cell in exhausted_cells):
+            continue
+        path = planner.plan_world(robot_xy, pose[:2], simplify=False)
+        if path is None:
+            continue
+        unseen, visible = coverage.gain(pose, fov, max_range)
+        frontier_seen = len(frontiers.intersection(visible))
+        if frontier_seen == 0 and unseen == 0:
+            continue
+        nearest_frontier = min(
+            math.hypot(cell[0] - item[0], cell[1] - item[1])
+            for item in frontiers
+        )
+        frontier_proximity = 1.0 / (1.0 + nearest_frontier)
+        path_cost = sum(math.hypot(b[0] - a[0], b[1] - a[1])
+                        for a, b in zip(path, path[1:])) / max(diagonal, 1e-6)
+        max_risk = max(float(planner.cost.max()), 1e-6)
+        risk = min(1.0, float(planner.cost[cell]) / max_risk)
+        coverage_gain = min(
+            1.0,
+            (float(unseen) + 2.0 * float(frontier_seen)) / max_visible_cells,
+        )
+        openness = min(1.0, float(len(visible)) / max_visible_cells)
+        action = CandidateAction(
+            pose, coverage_gain=coverage_gain, localization_gain=0.0,
+            path_cost=path_cost, risk=risk, repetition=0.0,
+        )
+        score = (
+            coverage_gain + 0.20 * openness + 0.30 * frontier_proximity
+            - 0.20 * path_cost - 0.05 * risk
+        )
+        candidates.append((score, action))
+        debug.append((score, action, frontier_seen, unseen))
+    candidates.sort(reverse=True, key=lambda item: item[0])
+    debug.sort(reverse=True, key=lambda item: item[0])
+    return (
+        None if not candidates else candidates[0][1],
+        debug[:max(0, int(max_debug))],
+    )

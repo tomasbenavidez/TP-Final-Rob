@@ -18,6 +18,7 @@ def generate_launch_description():
     auto_start = LaunchConfiguration('auto_start')
     launch_rviz = LaunchConfiguration('launch_rviz')
     config = os.path.join(mission_share, 'config', 'parte_c.yaml')
+    rviz_config = os.path.join(mission_share, 'config', 'parte_c_sim.rviz')
 
     def environment(name, launch_file):
         return IncludeLaunchDescription(
@@ -28,7 +29,11 @@ def generate_launch_description():
 
     navigation = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(os.path.join(nav_share, 'launch', 'parte_b.launch.py')),
-        launch_arguments={'use_sim_time': 'true', 'launch_rviz': launch_rviz}.items())
+        launch_arguments={
+            'use_sim_time': 'true',
+            'launch_rviz': launch_rviz,
+            'rviz_config': rviz_config,
+        }.items())
 
     model = os.path.join(sim_share, 'worlds', 'TurtleBot3BurgerRGBD', 'model.sdf')
     spawn_robot = Node(
@@ -64,7 +69,8 @@ def generate_launch_description():
     # así que la misión nunca lo veía (NOT_FOUND). Reubicado a un punto LIBRE y mapeado del cuarto
     # principal, en la dirección +x donde el robot arranca mirando (línea de visión directa).
     cone_specs = [
-        ('red_cone', 'ConeRed', '1.50', '0.0'),
+        # ('red_cone', 'ConeRed', '1.50', '0.0'),
+        ('red_cone', 'ConeRed', '-1.70', '-2.20'),
         ('yellow_cone', 'ConeYellow', '-1.70', '1.45'),
         ('blue_cone', 'ConeBlue', '1.70', '-2.20'),
     ]

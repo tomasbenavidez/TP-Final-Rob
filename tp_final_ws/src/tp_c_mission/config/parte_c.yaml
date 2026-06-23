@@ -30,3 +30,4 @@ mission_manager:
     min_utility: 0.02
     auto_start: false
     vision_timeout: 3.0
+    min_goal_new_cells: 8

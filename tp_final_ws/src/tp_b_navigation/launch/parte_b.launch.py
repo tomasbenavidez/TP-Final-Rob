@@ -28,18 +28,20 @@ def generate_launch_description():
     # Para volver al mapa del profe: map_yaml:=.../mapas/map.yaml
     default_map = os.path.join(pkg_share, 'maps', 'map_sim.yaml')
     landmarks_yaml = os.path.join(pkg_share, 'config', 'landmarks.yaml')
-    rviz_config = os.path.join(pkg_share, 'config', 'parte_b.rviz')
+    default_rviz_config = os.path.join(pkg_share, 'config', 'parte_b.rviz')
 
     map_yaml = LaunchConfiguration('map_yaml')
     robot_frame = LaunchConfiguration('robot_frame')
     use_sim_time = LaunchConfiguration('use_sim_time')
     launch_rviz = LaunchConfiguration('launch_rviz')
+    rviz_config = LaunchConfiguration('rviz_config')
 
     args = [
         DeclareLaunchArgument('map_yaml', default_value=default_map),
         DeclareLaunchArgument('robot_frame', default_value='base_footprint'),
         DeclareLaunchArgument('use_sim_time', default_value='true'),
         DeclareLaunchArgument('launch_rviz', default_value='true'),
+        DeclareLaunchArgument('rviz_config', default_value=default_rviz_config),
     ]
 
     common = {'use_sim_time': use_sim_time}

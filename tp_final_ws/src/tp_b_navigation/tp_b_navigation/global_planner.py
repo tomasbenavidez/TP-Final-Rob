@@ -31,6 +31,7 @@ from geometry_msgs.msg import PoseStamped
 from std_msgs.msg import Bool
 from tf2_ros import Buffer, TransformListener
 
+from tp_b_navigation.dynamic_obstacles import apply_dynamic_obstacles
 from tp_b_navigation.utils import yaw_from_quaternion, quaternion_from_yaw
 from tp_b_navigation.planner_core import GridPlannerCore
 
@@ -54,6 +55,8 @@ class GlobalPlanner(Node):
         self.base_frame = self.get_parameter('base_frame').value
 
         self.map = None
+        self.static_data = None
+        self.dynamic_data = None
         self.blocked = None      # bool [H,W] celdas no navegables (obstáculo inflado)
         self.cost = None         # float [H,W] penalización de cercanía (m)
         self.core = None
@@ -67,6 +70,8 @@ class GlobalPlanner(Node):
             reliability=ReliabilityPolicy.RELIABLE)
 
         self.create_subscription(OccupancyGrid, '/map', self.map_cb, qos_latched)
+        self.create_subscription(OccupancyGrid, '/dynamic_obstacles',
+                                 self.dynamic_cb, qos_latched)
         self.create_subscription(PoseStamped, '/plan_request', self.request_cb, 10)
 
         self.pub_plan = self.create_publisher(Path, '/plan', qos_latched)
@@ -85,9 +90,30 @@ class GlobalPlanner(Node):
         self.oy = msg.info.origin.position.y
         self.W = msg.info.width
         self.H = msg.info.height
-        data = np.array(msg.data, dtype=np.int16).reshape(self.H, self.W)
+        self.static_data = np.array(msg.data, dtype=np.int16).reshape(self.H, self.W)
+        self._rebuild_core()
+        self.get_logger().info(
+            f'Mapa recibido ({self.W}x{self.H}). Inflado ~{self.robot_radius / self.res:.1f} '
+            f'celdas ({self.robot_radius:.2f} m).')
 
-        inflate_cells = self.robot_radius / self.res
+    def dynamic_cb(self, msg: OccupancyGrid):
+        if self.static_data is None:
+            return
+        same_geometry = (
+            msg.info.width == self.W and msg.info.height == self.H and
+            abs(msg.info.resolution - self.res) < 1e-9 and
+            abs(msg.info.origin.position.x - self.ox) < 1e-9 and
+            abs(msg.info.origin.position.y - self.oy) < 1e-9)
+        if not same_geometry:
+            self.get_logger().warn('Ignoro /dynamic_obstacles con geometría distinta al /map.')
+            return
+        self.dynamic_data = np.array(msg.data, dtype=np.int16).reshape(self.H, self.W)
+        self._rebuild_core()
+
+    def _rebuild_core(self):
+        if self.static_data is None:
+            return
+        data = apply_dynamic_obstacles(self.static_data, self.dynamic_data)
         self.core = GridPlannerCore.from_occupancy(
             data, self.res, self.ox, self.oy,
             robot_radius=self.robot_radius,
@@ -97,9 +123,6 @@ class GlobalPlanner(Node):
         )
         self.blocked = self.core.blocked
         self.cost = self.core.cost
-        self.get_logger().info(
-            f'Mapa recibido ({self.W}x{self.H}). Inflado ~{inflate_cells:.1f} celdas '
-            f'({self.robot_radius:.2f} m).')
 
     # ------------------------------------------------------------- conversiones
     def world_to_cell(self, x, y):

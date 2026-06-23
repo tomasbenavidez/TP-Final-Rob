@@ -5,21 +5,23 @@ import math
 
 import numpy as np
 import rclpy
-from geometry_msgs.msg import PoseStamped, PoseWithCovarianceStamped
+from geometry_msgs.msg import Point, PoseStamped, PoseWithCovarianceStamped
 from nav_msgs.msg import OccupancyGrid
 from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy
+from std_msgs.msg import ColorRGBA
 from std_msgs.msg import Bool, Empty, String
 from std_srvs.srv import Trigger
-from visualization_msgs.msg import MarkerArray
+from visualization_msgs.msg import Marker, MarkerArray
 
 from tp_b_navigation.planner_core import GridPlannerCore
 from tp_b_navigation.landmark_io import load_landmark_map
 from tp_b_navigation.utils import quaternion_from_yaw
 from tp_c_mission.information_exploration import (
     CandidateAction, CoverageBelief, InformationPolicy,
-    expected_landmark_fraction, sample_candidate_poses, select_approach_pose,
+    expected_landmark_fraction, map_signature, observed_free_points,
+    sample_candidate_poses, select_approach_pose, select_frontier_action,
 )
 
 
@@ -35,6 +37,7 @@ class MissionManager(Node):
             'min_utility': 0.02, 'auto_start': False,
             'landmark_map_file': '',
             'vision_timeout': 3.0,
+            'min_goal_new_cells': 8,
         }
         for name, value in defaults.items():
             self.declare_parameter(name, value)
@@ -56,10 +59,12 @@ class MissionManager(Node):
         self.min_utility = float(get('min_utility'))
         self.auto_start = bool(get('auto_start'))
         self.vision_timeout = float(get('vision_timeout'))
+        self.min_goal_new_cells = int(get('min_goal_new_cells'))
 
         self.policy = InformationPolicy()
         self.planner = None
         self.coverage = None
+        self.map_signature = None
         self.pose = None
         self.covariance_scale = 1.0
         landmark_map_file = str(get('landmark_map_file'))
@@ -68,12 +73,17 @@ class MissionManager(Node):
             if landmark_map_file else [])
         self.candidate_poses = []
         self.visited = set()
+        self.exhausted = set()
         self.active = False
         self.approaching = False
         self.current_goal = None
+        self.goal_observed_before = 0
+        self.pending_goal_evaluation = None
         self.started_at = None
         self.last_vision_at = None
         self.status = 'IDLE'
+        self.last_frontier_debug = []
+        self.last_selected_action = None
 
         latched = QoSProfile(
             depth=1, history=HistoryPolicy.KEEP_LAST,
@@ -90,6 +100,10 @@ class MissionManager(Node):
         self.goal_pub = self.create_publisher(PoseStamped, '/mission_goal', 10)
         self.cancel_pub = self.create_publisher(Empty, '/mission_cancel', 10)
         self.status_pub = self.create_publisher(String, '/mission/status', latched)
+        self.coverage_pub = self.create_publisher(
+            MarkerArray, '/mission/coverage_markers', latched)
+        self.frontier_pub = self.create_publisher(
+            MarkerArray, '/mission/frontier_markers', latched)
         self.create_service(Trigger, '/mission/start', self.start_cb)
         self.create_service(Trigger, '/mission/cancel', self.cancel_cb)
         self.create_timer(1.0, self.loop)
@@ -97,14 +111,29 @@ class MissionManager(Node):
 
     def map_cb(self, msg):
         data = np.asarray(msg.data, dtype=np.int16).reshape(msg.info.height, msg.info.width)
+        signature = map_signature(
+            data, msg.info.resolution, msg.info.origin.position.x,
+            msg.info.origin.position.y)
+        if signature == self.map_signature:
+            return
+        had_map = self.map_signature is not None
+        if self.map_signature is not None and self.active:
+            self.get_logger().warn(
+                'El mapa cambió durante la misión; reinicio planner y cobertura.')
         self.planner = GridPlannerCore.from_occupancy(
             data, msg.info.resolution, msg.info.origin.position.x,
             msg.info.origin.position.y, robot_radius=self.robot_radius,
             clearance_weight=self.clearance_weight, clearance_max=self.clearance_max,
             allow_unknown=False)
         self.coverage = CoverageBelief(self.planner)
+        self.map_signature = signature
         self.candidate_poses = list(sample_candidate_poses(
             self.planner, self.spacing, self.yaw_samples))
+        if had_map:
+            self.visited.clear()
+            self.exhausted.clear()
+            self.current_goal = None
+            self.pending_goal_evaluation = None
 
     def pose_cb(self, msg):
         pose = msg.pose.pose
@@ -132,6 +161,9 @@ class MissionManager(Node):
         self.active = True
         self.approaching = False
         self.current_goal = None
+        self.pending_goal_evaluation = None
+        self.last_frontier_debug = []
+        self.last_selected_action = None
         self.started_at = self.get_clock().now()
         self._set_status('EXPLORING')
         response.success = True
@@ -143,6 +175,7 @@ class MissionManager(Node):
         self.active = False
         self.current_goal = None
         self.approaching = False
+        self.last_selected_action = None
         self._set_status('IDLE')
         response.success = True
         response.message = 'Misión cancelada.'
@@ -169,13 +202,20 @@ class MissionManager(Node):
         if result == 'REACHED' and self.approaching:
             self.active = False
             self.current_goal = None
+            self.last_selected_action = None
             self._set_status('FOUND')
         elif result == 'REACHED':
+            if self.current_goal is not None:
+                cell = self.planner.world_to_cell(*self.current_goal[:2])
+                self.pending_goal_evaluation = (cell, self.goal_observed_before)
             self.current_goal = None
         elif result in ('PLAN_FAILED', 'TIMEOUT'):
             if self.current_goal is not None:
-                self.visited.add(self.planner.world_to_cell(*self.current_goal[:2]))
+                cell = self.planner.world_to_cell(*self.current_goal[:2])
+                self.visited.add(cell)
+                self.exhausted.add(cell)
             self.current_goal = None
+            self.last_selected_action = None
             if self.approaching:
                 self.approaching = False
                 self._set_status('EXPLORING')
@@ -193,6 +233,7 @@ class MissionManager(Node):
             self.cancel_pub.publish(Empty())
             self.active = False
             self.current_goal = None
+            self.last_selected_action = None
             self._set_status('FAILED')
             self.get_logger().error('Misión detenida: cámara o TF sin datos recientes.')
             return
@@ -204,12 +245,15 @@ class MissionManager(Node):
         if self.approaching:
             return
         self.coverage.observe(self.pose, self.fov, self.camera_range)
+        self._evaluate_reached_goal()
+        self._publish_coverage_markers()
         if self.current_goal is not None:
             return
         if self.coverage.coverage_fraction() >= self.coverage_target:
             self._finish_not_found('cobertura agotada')
             return
         action = self._select_action()
+        self._publish_frontier_markers(action)
         if action is None or self.policy.utility(action, self.covariance_scale) < self.min_utility:
             self._finish_not_found('sin acciones informativas')
             return
@@ -238,19 +282,33 @@ class MissionManager(Node):
         diagonal = math.hypot(self.planner.width, self.planner.height) * self.planner.resolution
         candidates = []
         for _, pose, coverage_gain, localization_gain in ranked:
+            cell = self.planner.world_to_cell(*pose[:2])
+            if cell in self.exhausted:
+                continue
             path = self.planner.plan_world(self.pose[:2], pose[:2], simplify=False)
             if path is None:
                 continue
             path_cost = sum(math.hypot(b[0] - a[0], b[1] - a[1])
                             for a, b in zip(path, path[1:])) / max(diagonal, 1e-6)
-            cell = self.planner.world_to_cell(*pose[:2])
             risk = min(1.0, float(self.planner.cost[cell]) / max(self.clearance_max, 1e-6))
-            repetition = 1.0 if cell in self.visited else 0.0
+            repetition = 6.0 if cell in self.visited else 0.0
             candidates.append(CandidateAction(
                 pose, coverage_gain, localization_gain, path_cost, risk, repetition))
             if len(candidates) >= 40:
                 break
-        return self.policy.select(candidates, self.covariance_scale)
+        selected = self.policy.select(candidates, self.covariance_scale)
+        selected_cell = (
+            None if selected is None else self.planner.world_to_cell(*selected.pose[:2]))
+        if selected is not None and selected_cell not in self.visited and self.policy.utility(selected, self.covariance_scale) >= self.min_utility:
+            self.last_frontier_debug = []
+            self.last_selected_action = selected
+            return selected
+        frontier, debug = select_frontier_action(
+            self.planner, self.coverage, self.pose[:2], self.candidate_poses,
+            self.fov, self.camera_range, exhausted_cells=self.exhausted)
+        self.last_frontier_debug = debug
+        self.last_selected_action = frontier if frontier is not None else selected
+        return frontier if frontier is not None else selected
 
     def _publish_goal(self, pose):
         msg = PoseStamped()
@@ -260,12 +318,14 @@ class MissionManager(Node):
         msg.pose.orientation = quaternion_from_yaw(float(pose[2]))
         self.goal_pub.publish(msg)
         self.current_goal = pose
+        self.goal_observed_before = self._observed_free_count()
         self.visited.add(self.planner.world_to_cell(*pose[:2]))
 
     def _finish_not_found(self, reason):
         self.cancel_pub.publish(Empty())
         self.active = False
         self.current_goal = None
+        self.last_selected_action = None
         self._set_status('NOT_FOUND')
         self.get_logger().warn(f'Misión terminada sin cono: {reason}.')
 
@@ -278,6 +338,84 @@ class MissionManager(Node):
             return False
         age = (self.get_clock().now() - self.last_vision_at).nanoseconds * 1e-9
         return age <= self.vision_timeout
+
+    def _observed_free_count(self):
+        if self.coverage is None or self.planner is None:
+            return 0
+        free = ~self.planner.blocked
+        return int((self.coverage.observed & free).sum())
+
+    def _evaluate_reached_goal(self):
+        if self.pending_goal_evaluation is None:
+            return
+        cell, observed_before = self.pending_goal_evaluation
+        gained = self._observed_free_count() - int(observed_before)
+        if gained < self.min_goal_new_cells:
+            self.exhausted.add(cell)
+        self.pending_goal_evaluation = None
+
+    def _publish_coverage_markers(self):
+        if self.coverage is None or self.planner is None:
+            return
+        marker = Marker()
+        marker.header.frame_id = 'map'
+        marker.header.stamp = self.get_clock().now().to_msg()
+        marker.ns = 'mission_coverage'
+        marker.id = 0
+        marker.type = Marker.CUBE_LIST
+        marker.action = Marker.ADD
+        marker.scale.x = self.planner.resolution
+        marker.scale.y = self.planner.resolution
+        marker.scale.z = 0.02
+        marker.pose.orientation.w = 1.0
+        marker.color = ColorRGBA(r=0.1, g=0.45, b=1.0, a=0.28)
+        for x, y in observed_free_points(self.planner, self.coverage):
+            marker.points.append(Point(x=float(x), y=float(y), z=0.02))
+        self.coverage_pub.publish(MarkerArray(markers=[marker]))
+
+    def _publish_frontier_markers(self, selected):
+        markers = []
+        delete = Marker()
+        delete.header.frame_id = 'map'
+        delete.header.stamp = self.get_clock().now().to_msg()
+        delete.action = Marker.DELETEALL
+        markers.append(delete)
+
+        for index, (_score, action, _frontier_seen, _unseen) in enumerate(self.last_frontier_debug[:12]):
+            marker = Marker()
+            marker.header.frame_id = 'map'
+            marker.header.stamp = delete.header.stamp
+            marker.ns = 'mission_frontiers'
+            marker.id = index
+            marker.type = Marker.SPHERE
+            marker.action = Marker.ADD
+            marker.pose.position.x = float(action.pose[0])
+            marker.pose.position.y = float(action.pose[1])
+            marker.pose.position.z = 0.08
+            marker.pose.orientation.w = 1.0
+            marker.scale.x = marker.scale.y = marker.scale.z = 0.12
+            marker.color = ColorRGBA(r=1.0, g=0.58, b=0.08, a=0.85)
+            markers.append(marker)
+
+        selected = selected or self.last_selected_action
+        if selected is not None:
+            marker = Marker()
+            marker.header.frame_id = 'map'
+            marker.header.stamp = delete.header.stamp
+            marker.ns = 'mission_selected_goal'
+            marker.id = 100
+            marker.type = Marker.ARROW
+            marker.action = Marker.ADD
+            marker.pose.position.x = float(selected.pose[0])
+            marker.pose.position.y = float(selected.pose[1])
+            marker.pose.position.z = 0.10
+            marker.pose.orientation = quaternion_from_yaw(float(selected.pose[2]))
+            marker.scale.x = 0.35
+            marker.scale.y = 0.08
+            marker.scale.z = 0.08
+            marker.color = ColorRGBA(r=0.1, g=1.0, b=0.35, a=0.95)
+            markers.append(marker)
+        self.frontier_pub.publish(MarkerArray(markers=markers))
 
 
 def main(args=None):

@@ -26,6 +26,8 @@ Internamente:
 
 - `/mission_goal`: objetivo elegido por exploración o aproximación.
 - `/mission_cancel`: cancelación segura.
+- `/mission/coverage_markers`: celdas libres ya observadas por la cámara, para RViz.
+- `/mission/frontier_markers`: candidatos frontier y objetivo elegido, para RViz.
 - `/navigation_result`: `REACHED`, `PLAN_FAILED`, `TIMEOUT` o `PREEMPTED`.
 - `/red_cone_pose`: pose confirmada en `map`, con covarianza según depth/monocular.
 - `/red_cone/debug_image` y `/red_cone/mask`: diagnóstico para calibración.
@@ -40,6 +42,8 @@ ros2 launch tp_c_mission parte_c_sim.launch.py world:=casa
 ```
 
 El launch usa el mapa y MCL de Parte B, un Burger con cámara RGB-D y tres conos: rojo, amarillo y azul. Los launch originales de Parte B conservan el Burger estándar por defecto.
+RViz abre con `parte_c_sim.rviz`, que muestra `/plan`, `/mission_goal`, cobertura explorada,
+frontiers candidatos y la pose confirmada del cono.
 
 ### Rosbag de visión
 
@@ -51,6 +55,16 @@ ros2 launch tp_c_mission parte_c_bag.launch.py \
 ```
 
 Los umbrales iniciales están en `config/parte_c.yaml`; deben calibrarse contra el bag sin convertirlos en constantes del código.
+El perfil de bag abre por defecto RViz en `odom`, con TF, LIDAR (`/tb4_0/scan`),
+odometría con traza (`/tb4_0/odom`), pose confirmada del cono, imagen debug y máscara.
+El mapa (`/map`) y el plan (`/plan`) quedan cargados pero desactivados, porque un rosbag
+de visión puro puede no traer navegación activa.
+
+Para correr sólo los nodos de percepción, sin GUI:
+
+```bash
+ros2 launch tp_c_mission parte_c_bag.launch.py launch_rviz:=false
+```
 
 ### TurtleBot4 real
 
@@ -76,7 +90,7 @@ El perfil real no inicia `landmark_sensor`. `aruco_mcl_adapter` transforma detec
 - Si A* no puede alcanzar un candidato, se descarta y se evalúa otro.
 - Si el cono se ve por una abertura, el objetivo final se valida sobre la grilla y el camino rodea paredes conocidas.
 - Ante timeout o cobertura agotada, se publica `NOT_FOUND` y se cancela navegación.
-- `custom_casa_obs` mantiene la evasión reactiva de Parte B. Un obstáculo que bloquee la ruta puede causar lentitud porque no hay costmap dinámico; es una limitación deliberada de este incremento.
+- `custom_casa_obs` mantiene la evasión reactiva de Parte B y agrega `/dynamic_obstacles` compacto para que el siguiente A* rodee obstáculos no mapeados ya detectados sin bloquear pasillos enteros.
 - `custom_casa_obs2` no forma parte de los entornos soportados.
 
 ## Verificación
