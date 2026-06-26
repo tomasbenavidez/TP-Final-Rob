@@ -25,7 +25,7 @@ from rclpy.executors import ExternalShutdownException
 
 from geometry_msgs.msg import Twist, PoseStamped, PoseWithCovarianceStamped
 from nav_msgs.msg import Path
-from std_msgs.msg import Bool, String
+from std_msgs.msg import Bool, String, Empty
 from tf2_ros import Buffer, TransformListener
 
 from tp_b_navigation.utils import angle_diff, yaw_from_quaternion
@@ -82,6 +82,7 @@ class StateMachine(Node):
         # --- estado interno ---
         self.state = IDLE
         self.goal = None            # PoseStamped objetivo actual
+        self.goal_source = None     # 'manual' o 'mission'
         self.new_goal = False       # llegó un goal nuevo (dispara re-planeo)
         self.path = None            # lista [(x,y)] de la ruta actual
         self.path_idx = 0
@@ -93,6 +94,8 @@ class StateMachine(Node):
         self.create_subscription(PoseWithCovarianceStamped, '/initialpose',
                                  self.initialpose_cb, 10)
         self.create_subscription(PoseStamped, '/goal_pose', self.goal_cb, 10)
+        self.create_subscription(PoseStamped, '/mission_goal', self.mission_goal_cb, 10)
+        self.create_subscription(Empty, '/mission_cancel', self.mission_cancel_cb, 10)
         self.create_subscription(Path, '/plan', self.plan_cb, 10)
         self.create_subscription(Bool, '/plan_status', self.plan_status_cb, 10)
         self.create_subscription(Bool, '/obstacle_detected', self.obstacle_cb, 10)
@@ -100,6 +103,7 @@ class StateMachine(Node):
         self.pub_cmd = self.create_publisher(Twist, '/cmd_vel', 10)
         self.pub_state = self.create_publisher(String, '/nav_state', 10)
         self.pub_request = self.create_publisher(PoseStamped, '/plan_request', 10)
+        self.pub_result = self.create_publisher(String, '/navigation_result', 10)
 
         self.tf_buffer = Buffer()
         self.tf_listener = TransformListener(self.tf_buffer, self)
@@ -145,14 +149,36 @@ class StateMachine(Node):
         # nueva localización inicial: reiniciar a LOCALIZING
         self.tf_ok_since = None
         self.goal = None
+        self.goal_source = None
         self.path = None
         self.set_state(LOCALIZING)
 
     def goal_cb(self, msg: PoseStamped):
+        self._accept_goal(msg, 'manual')
+
+    def mission_goal_cb(self, msg: PoseStamped):
+        if self.goal_source == 'mission' and self.goal is not None:
+            self._publish_result('PREEMPTED')
+        self._accept_goal(msg, 'mission')
+
+    def _accept_goal(self, msg, source):
         self.goal = msg
+        self.goal_source = source
         self.new_goal = True
         self.get_logger().info(
-            f'Goal recibido: ({msg.pose.position.x:.2f}, {msg.pose.position.y:.2f}).')
+            f'Goal {source} recibido: '
+            f'({msg.pose.position.x:.2f}, {msg.pose.position.y:.2f}).')
+
+    def mission_cancel_cb(self, _msg):
+        if self.goal_source == 'mission' and self.goal is not None:
+            self._publish_result('PREEMPTED')
+        self.goal = None
+        self.goal_source = None
+        self.new_goal = False
+        self.path = None
+        self.stop()
+        if self.state not in (IDLE, LOCALIZING):
+            self.set_state(WAITING_GOAL)
 
     def plan_cb(self, msg: Path):
         if msg.poses:
@@ -215,6 +241,11 @@ class StateMachine(Node):
                 self.set_state(FOLLOWING)
             elif self.plan_ok is False or (self.now() - self.t_enter > self.plan_timeout):
                 self.get_logger().warn('No se pudo planear; vuelvo a esperar goal.')
+                if self.goal_source == 'mission':
+                    result = 'PLAN_FAILED' if self.plan_ok is False else 'TIMEOUT'
+                    self._publish_result(result)
+                    self.goal = None
+                    self.goal_source = None
                 self.set_state(WAITING_GOAL)
 
         elif self.state == FOLLOWING:
@@ -232,7 +263,10 @@ class StateMachine(Node):
         elif self.state == GOAL_REACHED:
             # Objetivo cumplido: limpiar para no re-planear sobre un goal ya alcanzado.
             self.stop()
+            if self.goal_source == 'mission':
+                self._publish_result('REACHED')
             self.goal = None
+            self.goal_source = None
             self.path = None
             self.set_state(WAITING_GOAL)
 
@@ -291,6 +325,9 @@ class StateMachine(Node):
 
     def publish_state(self):
         self.pub_state.publish(String(data=self.state))
+
+    def _publish_result(self, result):
+        self.pub_result.publish(String(data=result))
 
 
 def main(args=None):

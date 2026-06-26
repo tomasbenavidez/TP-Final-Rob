@@ -1,0 +1,148 @@
+Panels:
+  - Class: rviz_common/Displays
+    Name: Displays
+    Property Tree Widget:
+      Expanded:
+        - /Global Options1
+        - /Robot y sensores1
+        - /Detección cono rojo1
+      Splitter Ratio: 0.55
+  - Class: rviz_common/Views
+    Name: Views
+Visualization Manager:
+  Class: ""
+  Displays:
+    - Class: rviz_default_plugins/Grid
+      Name: Piso / referencia
+      Enabled: true
+      Color: 95; 95; 95
+      Line Style:
+        Line Width: 0.02
+        Value: Lines
+      Plane: XY
+      Plane Cell Count: 24
+      Reference Frame: <Fixed Frame>
+      Value: true
+    - Class: rviz_default_plugins/TF
+      Name: Robot y sensores
+      Enabled: true
+      Show Names: true
+      Show Axes: true
+      Show Arrows: false
+      Marker Scale: 0.35
+      Frames:
+        All Enabled: true
+      Value: true
+    - Class: rviz_default_plugins/LaserScan
+      Name: LIDAR del bag
+      Enabled: true
+      Topic:
+        Value: /tb4_0/scan
+        Depth: 5
+        Durability Policy: Volatile
+        Reliability Policy: Best Effort
+        History Policy: Keep Last
+      Size (m): 0.04
+      Style: Points
+      Color: 255; 80; 40
+      Color Transformer: FlatColor
+      Value: true
+    - Class: rviz_default_plugins/Odometry
+      Name: Odometría / trayectoria recorrida
+      Enabled: true
+      Topic:
+        Value: /tb4_0/odom
+        Depth: 20
+        Durability Policy: Volatile
+        Reliability Policy: Reliable
+        History Policy: Keep Last
+      Shape: Arrow
+      Color: 80; 180; 255
+      Position Tolerance: 0.04
+      Angle Tolerance: 0.10
+      Keep: 3000
+      Value: true
+    - Class: rviz_default_plugins/Map
+      Name: Mapa si está cargado
+      Enabled: false
+      Topic:
+        Value: /map
+        Depth: 1
+        Durability Policy: Transient Local
+        Reliability Policy: Reliable
+        History Policy: Keep Last
+      Color Scheme: map
+      Draw Behind: true
+      Alpha: 0.65
+      Value: false
+    - Class: rviz_default_plugins/Path
+      Name: Plan de navegación si está activo
+      Enabled: false
+      Topic:
+        Value: /plan
+        Depth: 1
+        Durability Policy: Transient Local
+        Reliability Policy: Reliable
+        History Policy: Keep Last
+      Color: 25; 255; 120
+      Line Style: Lines
+      Line Width: 0.07
+      Value: false
+    - Class: rviz_default_plugins/PoseWithCovariance
+      Name: Detección cono rojo
+      Enabled: true
+      Topic:
+        Value: /red_cone_pose
+        Depth: 10
+        Durability Policy: Volatile
+        Reliability Policy: Reliable
+        History Policy: Keep Last
+      Shape: Arrow
+      Color: 255; 25; 25
+      Value: true
+    - Class: rviz_default_plugins/Image
+      Name: Cámara con debug HSV
+      Enabled: true
+      Topic:
+        Value: /red_cone/debug_image
+        Depth: 5
+        Durability Policy: Volatile
+        Reliability Policy: Best Effort
+        History Policy: Keep Last
+      Normalize Range: true
+      Value: true
+    - Class: rviz_default_plugins/Image
+      Name: Máscara roja
+      Enabled: true
+      Topic:
+        Value: /red_cone/mask
+        Depth: 5
+        Durability Policy: Volatile
+        Reliability Policy: Best Effort
+        History Policy: Keep Last
+      Normalize Range: true
+      Value: true
+  Global Options:
+    Background Color: 36; 36; 36
+    Fixed Frame: odom
+    Frame Rate: 30
+  Name: root
+  Tools:
+    - Class: rviz_default_plugins/MoveCamera
+    - Class: rviz_default_plugins/Select
+    - Class: rviz_default_plugins/Measure
+  Views:
+    Current:
+      Class: rviz_default_plugins/TopDownOrtho
+      Name: Vista superior del robot
+      Scale: 16
+      X: 0
+      Y: 0
+  Value: true
+Window Geometry:
+  Height: 950
+  Width: 1500
+  X: 50
+  Y: 50
+  Hide Left Dock: false
+  Hide Right Dock: false

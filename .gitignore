@@ -36,3 +36,7 @@ slides/
 consigna/
 tp_final_ws/logs_runs/trayectoria.json
 logs_runs/ 
+
+/docs/context
+/tps_viejos
+CLAUDE.md

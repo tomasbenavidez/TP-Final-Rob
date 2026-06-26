@@ -34,10 +34,12 @@ from geometry_msgs.msg import (
     PoseArray, Pose, PoseWithCovarianceStamped, TransformStamped,
 )
 from tf2_ros import TransformBroadcaster
+from tp_slam_interfaces.msg import LandmarkObservationArray
 
 from tp_b_navigation.utils import (
     normalize_angle, angle_diff, yaw_from_quaternion, quaternion_from_yaw,
 )
+from tp_b_navigation.landmark_io import load_landmark_map
 
 
 class MCL(Node):
@@ -75,6 +77,7 @@ class MCL(Node):
         # TF). Es el mismo truco que usa AMCL; sin esto RViz parpadea con "extrapolation into
         # the future". Igual que en AMCL, default 0.1 s.
         self.declare_parameter('transform_tolerance', 0.1)
+        self.declare_parameter('landmark_map_file', '')
 
         self.N = int(self.get_parameter('num_particles').value)
         self.a1 = float(self.get_parameter('alpha1').value)
@@ -101,6 +104,7 @@ class MCL(Node):
         self.initialized = False
 
         self.landmarks = None        # array Mx2 (posiciones conocidas en map)
+        self.landmarks_by_id = {}
         self.last_odom = None        # (x, y, theta) de la última odometría procesada
         self.last_odom_pose = None   # pose de odom actual (para TF map->odom)
         self.accum_d = 0.0           # movimiento acumulado desde la última corrección
@@ -117,6 +121,9 @@ class MCL(Node):
         self.create_subscription(Odometry, '/odom', self.odom_cb, 20)
         self.create_subscription(PoseArray, '/observed_landmarks',
                                  self.observation_cb, 10)
+        self.create_subscription(
+            LandmarkObservationArray, '/observed_landmark_ids',
+            self.identified_observation_cb, 10)
         self.create_subscription(PoseWithCovarianceStamped, '/initialpose',
                                  self.initialpose_cb, 10)
 
@@ -128,6 +135,12 @@ class MCL(Node):
         rate = float(self.get_parameter('tf_publish_rate').value)
         self.create_timer(1.0 / rate, self.publish_tf)
 
+        landmark_map_file = self.get_parameter('landmark_map_file').value
+        if landmark_map_file:
+            self.landmarks_by_id = load_landmark_map(landmark_map_file)
+            self.get_logger().info(
+                f'Cargados {len(self.landmarks_by_id)} landmarks ArUco con ID.')
+
         self.get_logger().info(
             f'MCL iniciado con {self.N} partículas. Esperando /initialpose '
             f'(usar "2D Pose Estimate" en RViz).')
@@ -136,6 +149,10 @@ class MCL(Node):
     def landmarks_cb(self, msg: PoseArray):
         self.landmarks = np.array(
             [[p.position.x, p.position.y] for p in msg.poses], dtype=float)
+        if not self.landmarks_by_id:
+            self.landmarks_by_id = {
+                index: tuple(point) for index, point in enumerate(self.landmarks)
+            }
 
     def initialpose_cb(self, msg: PoseWithCovarianceStamped):
         x = msg.pose.pose.position.x
@@ -154,6 +171,10 @@ class MCL(Node):
         self.get_logger().info(
             f'Pose inicial fijada en ({x:.2f}, {y:.2f}, {math.degrees(yaw):.0f}°).')
         self.publish_particles()
+        # Publicar /mcl_pose ya al localizar: las correcciones sólo ocurren al moverse, así
+        # que sin esto /mcl_pose no sale con el robot quieto y los consumidores (p. ej. el
+        # mission_manager de Parte C, que exige /mcl_pose para arrancar) quedan bloqueados.
+        self.publish_pose()
 
     def odom_cb(self, msg: Odometry):
         p = msg.pose.pose
@@ -177,6 +198,20 @@ class MCL(Node):
         if self.accum_d < self.update_min_d and self.accum_a < self.update_min_a:
             return
         self._correct(msg)
+        self.accum_d = 0.0
+        self.accum_a = 0.0
+
+    def identified_observation_cb(self, msg: LandmarkObservationArray):
+        if not self.initialized or not self.landmarks_by_id:
+            return
+        if self.accum_d < self.update_min_d and self.accum_a < self.update_min_a:
+            return
+        measurements = [
+            (int(obs.landmark_id), float(obs.range_m), float(obs.bearing_rad))
+            for obs in msg.observations
+            if obs.range_m > 0.0 and int(obs.landmark_id) in self.landmarks_by_id
+        ]
+        self._correct_measurements(measurements)
         self.accum_d = 0.0
         self.accum_a = 0.0
 
@@ -213,6 +248,16 @@ class MCL(Node):
     def _correct(self, msg: PoseArray):
         """Pesa las partículas con la verosimilitud de las observaciones range/bearing."""
         m = min(len(msg.poses), len(self.landmarks))
+        measurements = []
+        for index in range(m):
+            range_m = msg.poses[index].position.x
+            bearing = msg.poses[index].position.z
+            if range_m == 0.0 and bearing == 0.0:
+                continue
+            measurements.append((index, range_m, bearing))
+        self._correct_measurements(measurements)
+
+    def _correct_measurements(self, measurements):
         log_w = np.zeros(self.N)
         used = 0
 
@@ -223,14 +268,12 @@ class MCL(Node):
         inv_2sr2 = 1.0 / (2.0 * self.sigma_r ** 2)
         inv_2sb2 = 1.0 / (2.0 * self.sigma_b ** 2)
 
-        for i in range(m):
-            r = msg.poses[i].position.x
-            phi = msg.poses[i].position.z
-            if r == 0.0 and phi == 0.0:
-                continue  # landmark no visible / ocluido
+        for landmark_id, r, phi in measurements:
+            if landmark_id not in self.landmarks_by_id:
+                continue
             used += 1
 
-            lmx, lmy = self.landmarks[i]
+            lmx, lmy = self.landmarks_by_id[landmark_id]
             dx = lmx - px
             dy = lmy - py
             r_hat = np.hypot(dx, dy)

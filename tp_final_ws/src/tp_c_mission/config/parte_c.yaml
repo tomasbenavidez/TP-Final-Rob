@@ -1,0 +1,33 @@
+red_cone_detector:
+  ros__parameters:
+    hue_low: 10
+    hue_high: 170
+    min_saturation: 100
+    min_value: 70
+    morphology_radius: 1
+    min_area_px: 150
+    required_hits: 3
+    window_size: 5
+    max_center_distance_px: 25.0
+    cone_height_m: 0.30
+    min_depth_m: 0.20
+    max_depth_m: 5.0
+    max_depth_age: 0.20
+    # Validación geométrica 3D (filtrado de distractores, p. ej. la cara roja del HospitalBot):
+    cone_height_tol_m: 0.13   # |altura_real - cono| permitido (cono medido ~0.31 m)
+    max_base_height_m: 0.20   # z máx de la base en 'map' para considerarla apoyada en el piso
+
+mission_manager:
+  ros__parameters:
+    candidate_spacing: 0.50
+    candidate_yaws: 8
+    camera_fov: 1.05
+    camera_range: 3.0
+    landmark_range: 4.0
+    approach_standoff: 0.55
+    mission_timeout: 300.0
+    coverage_target: 0.95
+    min_utility: 0.02
+    auto_start: false
+    vision_timeout: 3.0
+    min_goal_new_cells: 8
