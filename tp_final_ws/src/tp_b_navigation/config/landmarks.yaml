@@ -1,5 +1,5 @@
 # Landmarks virtuales (Sistema 3): puntos sobre superficies de pared visibles.
-# Densificados (~36) para coherencia con la densidad de ArUco real y para romper
+# Densificados (60) para coherencia con la densidad de ArUco real y para romper
 # la ambiguedad multimodal del MCL. Generados por farthest-point sampling del mapa.
 landmark_publisher:
   ros__parameters:
@@ -76,3 +76,51 @@ landmark_publisher:
     - -2.92
     - 0.78
     - -1.52
+    - 2.88
+    - -0.88
+    - 2.12
+    - -0.42
+    - 2.93
+    - -2.47
+    - 0.08
+    - 1.62
+    - 1.68
+    - -2.88
+    - -2.27
+    - -0.83
+    - -0.62
+    - -0.88
+    - -2.77
+    - -1.72
+    - -2.32
+    - 0.53
+    - -2.88
+    - -0.42
+    - -2.92
+    - 2.23
+    - -2.88
+    - 0.88
+    - -0.92
+    - 1.08
+    - 1.43
+    - 1.83
+    - 1.98
+    - -1.97
+    - 0.73
+    - 0.33
+    - -0.92
+    - -2.47
+    - -2.22
+    - -1.42
+    - -1.52
+    - -1.42
+    - 1.68
+    - 0.83
+    - -1.57
+    - -0.17
+    - 0.38
+    - -2.88
+    - -0.88
+    - 0.33
+    - 2.88
+    - 2.33

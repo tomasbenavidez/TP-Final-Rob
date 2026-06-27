@@ -17,6 +17,8 @@ def generate_launch_description():
     world = LaunchConfiguration('world')
     auto_start = LaunchConfiguration('auto_start')
     launch_rviz = LaunchConfiguration('launch_rviz')
+    odom_topic = LaunchConfiguration('odom_topic')
+    truth_odom_topic = LaunchConfiguration('truth_odom_topic')
     config = os.path.join(mission_share, 'config', 'parte_c.yaml')
     rviz_config = os.path.join(mission_share, 'config', 'parte_c_sim.rviz')
 
@@ -31,6 +33,9 @@ def generate_launch_description():
         PythonLaunchDescriptionSource(os.path.join(nav_share, 'launch', 'parte_b.launch.py')),
         launch_arguments={
             'use_sim_time': 'true',
+            'odom_topic': odom_topic,
+            'truth_odom_topic': truth_odom_topic,
+            'camera_frame': 'camera_link',
             'launch_rviz': launch_rviz,
             'rviz_config': rviz_config,
         }.items())
@@ -94,6 +99,8 @@ def generate_launch_description():
                               description='casa o casa_obs'),
         DeclareLaunchArgument('auto_start', default_value='false'),
         DeclareLaunchArgument('launch_rviz', default_value='true'),
+        DeclareLaunchArgument('odom_topic', default_value='/calc_odom'),
+        DeclareLaunchArgument('truth_odom_topic', default_value='/odom'),
         environment('casa', 'custom_casa.launch.py'),
         environment('casa_obs', 'custom_casa_obs.launch.py'),
         TimerAction(period=2.0, actions=[spawn_robot] + cone_nodes),

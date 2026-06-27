@@ -42,7 +42,8 @@ ros2 launch turtlebot3_custom_simulation custom_casa.launch.py
 ```
 
 **Qué se ve en Gazebo:** la casa (el mismo entorno cuyo mapa generó la Parte A) con el TurtleBot3
-*burger* spawneado en el origen `(0,0)`. Publica `/scan` (LIDAR), `/odom`, `/clock` y la TF
+*burger* spawneado en el origen `(0,0)`. Publica `/scan` (LIDAR), `/odom` como verdad
+simulada, `/calc_odom` para la predicción, `/clock` y la TF
 `odom→base_footprint`.
 
 > En `custom_casa_obs` aparecen además obstáculos (valijas/sofá/mesa) que **no están en el mapa**.
@@ -91,7 +92,7 @@ La config `parte_b.rviz` ya trae los displays. Fixed frame = `map`.
 | Display | Topic | Qué se ve |
 |---|---|---|
 | Map | `/map` | la grilla de ocupación de la casa |
-| Landmarks GT | `/landmarks_markers` | 36 estrellas/cilindros verdes sobre las paredes |
+| Landmarks GT | `/landmarks_markers` | 60 estrellas/cilindros verdes sobre las paredes |
 | Observed Landmarks | `/observed_landmarks_markers` | puntos naranjas: lo que la "cámara" ve este frame |
 | LaserScan | `/scan` | el LIDAR (best_effort) |
 | MCL Particles | `/particlecloud` | la nube de partículas del filtro |

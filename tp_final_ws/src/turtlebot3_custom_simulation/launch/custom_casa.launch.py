@@ -78,6 +78,21 @@ def generate_launch_description():
         gzclient_cmd,
         spawn_turtlebot_cmd,
         robot_state_publisher_cmd,
+        Node(
+            package='turtlebot3_custom_simulation',
+            executable='turtlebot3_custom_simulation',
+            name='calculated_odometry',
+            output='screen',
+            parameters=[{
+                'use_sim_time': True,
+                'odom_frame': 'calc_odom',
+                'base_frame': 'base_footprint',
+                'joint_states_frame': 'base_footprint',
+                'wheels.separation': 0.160,
+                'wheels.radius': 0.033,
+                'publish_tf': False,
+            }],
+        ),
         # Static transform between map and odom
         # Node(
         #     package='tf2_ros',

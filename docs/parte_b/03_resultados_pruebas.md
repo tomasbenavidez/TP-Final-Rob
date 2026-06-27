@@ -44,6 +44,9 @@ Las tres correcciones (desacople del sensor / densidad 14→36 / roughening) est
 [`01_implementacion.md`](01_implementacion.md) §4. Caso patológico: girar en el lugar en círculos
 cerrados sostenidos puede dar un pico de ~1 m, pero **se recupera** (antes divergía).
 
+La configuración actual eleva la densidad a 60 y usa `/calc_odom`; las métricas anteriores se
+conservan como resultado histórico de la corrida con 36 y no se atribuyen a la configuración nueva.
+
 ---
 
 ## 3. `custom_casa_obs` — obstáculos NO mapeados (consigna 1.9)
@@ -86,7 +89,7 @@ en vez de re-planear contra él. Es el siguiente incremento natural.
 
 | Requisito | Estado |
 |---|---|
-| 1.1 Sistema 3 (landmarks de cámara virtuales) | ✅ 36 landmarks + sensor con FOV y oclusión |
+| 1.1 Sistema 3 (landmarks de cámara virtuales) | ✅ 60 landmarks + sensor con FOV frontal y oclusión |
 | 1.2 Localización inicial (`initialpose`) | ✅ "2D Pose Estimate" → MCL siembra |
 | 1.3 Objetivo (`goal_pose`) | ✅ "2D Goal Pose" |
 | 1.4 Localización continua (filtro probabilístico) | ✅ MCL, 0.02–0.18 m en rutas normales |

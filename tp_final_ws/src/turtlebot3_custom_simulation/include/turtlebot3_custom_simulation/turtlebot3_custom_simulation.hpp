@@ -68,6 +68,7 @@ private:
 
   double wheel_seperation_;
   double wheel_radius_;
+  bool publish_tf_;
 
   // Function prototypes
   void init_parameters();
