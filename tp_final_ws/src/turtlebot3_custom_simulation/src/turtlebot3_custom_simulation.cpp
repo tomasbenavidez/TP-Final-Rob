@@ -128,7 +128,7 @@ void Turtlebot3Fake::init_variables()
 ** Callback functions for ROS subscribers
 ********************************************************************************/
 void Turtlebot3Fake::command_velocity_callback(
-  const geometry_msgs::msg::Twist::SharedPtr cmd_vel_msg)
+  const geometry_msgs::msg::Twist::ConstSharedPtr cmd_vel_msg)
 {
   last_cmd_vel_time_ = this->now();
 

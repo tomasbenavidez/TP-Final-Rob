@@ -24,10 +24,36 @@ Salvo que se indique lo contrario, los comandos parten de la raíz del repositor
 ## 0. Compilar (una vez)
 
 ```bash
-source docs/parte_b/scripts/setup_parte_b.sh
+rosenv
 cd tp_final_ws
-colcon build --packages-select tp_b_navigation
+colcon build --packages-select \
+  tp_slam_interfaces tp_slam_aruco tp_b_navigation \
+  tp_c_mission turtlebot3_custom_simulation \
+  --cmake-args -DPython3_EXECUTABLE="$CONDA_PREFIX/bin/python3"
+source install/setup.zsh
 ```
+
+En el Mac con RoboStack, el entorno `rosenv_mf` usa Python 3.11, NumPy 1.26.4 y
+pytest 7.4.4. Esta versión de pytest es necesaria porque el `launch_testing 1.0.4`
+de ROS 2 Humble no es compatible con pytest 9.
+
+Para reconstruir `tp_slam_interfaces` desde cero, abrí una terminal nueva, ejecutá
+`rosenv` y borrá sus directorios **antes** de sourcear `install/setup.zsh`:
+
+```bash
+cd tp_final_ws
+rm -rf build/tp_slam_interfaces install/tp_slam_interfaces
+colcon build --packages-select \
+  tp_slam_interfaces tp_slam_aruco tp_b_navigation \
+  tp_c_mission turtlebot3_custom_simulation \
+  --cmake-args -DPython3_EXECUTABLE="$CONDA_PREFIX/bin/python3"
+source install/setup.zsh
+```
+
+Si se borra un paquete después de sourcear el workspace en la misma terminal,
+`AMENT_PREFIX_PATH` y `CMAKE_PREFIX_PATH` conservan temporalmente la ruta eliminada
+y `colcon` avisa que no existe. Una terminal nueva evita esos warnings sin editar
+manualmente las variables de entorno.
 
 ---
 

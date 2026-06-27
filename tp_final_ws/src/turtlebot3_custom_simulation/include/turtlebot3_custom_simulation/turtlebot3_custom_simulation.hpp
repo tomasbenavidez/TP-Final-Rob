@@ -73,7 +73,7 @@ private:
   // Function prototypes
   void init_parameters();
   void init_variables();
-  void command_velocity_callback(const geometry_msgs::msg::Twist::SharedPtr cmd_vel_msg);
+  void command_velocity_callback(const geometry_msgs::msg::Twist::ConstSharedPtr cmd_vel_msg);
   void update_callback();
   bool update_odometry(const rclcpp::Duration & diff_time);
   void update_joint_state();
