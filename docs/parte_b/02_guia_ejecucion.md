@@ -1,8 +1,8 @@
 # Parte B — Guía de ejecución (correr todo + sacar screenshots)
 
 Instrucciones para levantar el ciclo completo de Parte B, qué se ve en cada paso, qué comandos
-usar en **Gazebo** y **RViz**, y qué screenshots faltan. Pensado para correr en el Mac del equipo
-(ROS 2 Humble por RoboStack, env conda `rosenv`).
+usar en **Gazebo** y **RViz**, y qué screenshots faltan. Los paquetes usan los mismos launch
+en ROS 2 Humble sobre Linux y sobre macOS/RoboStack.
 
 Salvo que se indique lo contrario, los comandos parten de la raíz del repositorio clonado.
 
@@ -16,20 +16,31 @@ Salvo que se indique lo contrario, los comandos parten de la raíz del repositor
 >   y fija el DDS de una). Hace falta sí o sí si corrés en un zsh **no-interactivo** (scripts,
 >   tareas automáticas), donde `setup.zsh` aborta por los errores de `compdef`.
 >
-> En una PC Linux normal alcanzaría con `source install/setup.zsh` (o `.bash`) y los `ros2 launch`
-> de siempre.
+> En Linux alcanza con `source tp_final_ws/install/setup.bash`. No hace falta Conda ni configurar
+> un RPATH manual.
 
 ---
 
 ## 0. Compilar (una vez)
 
+Linux:
+
 ```bash
+cd tp_final_ws
+colcon build --packages-select \
+  tp_slam_interfaces tp_slam_aruco tp_b_navigation \
+  tp_c_mission turtlebot3_custom_simulation
+source install/setup.bash
+```
+
+macOS/RoboStack:
+
+```zsh
 rosenv
 cd tp_final_ws
 colcon build --packages-select \
   tp_slam_interfaces tp_slam_aruco tp_b_navigation \
-  tp_c_mission turtlebot3_custom_simulation \
-  --cmake-args -DPython3_EXECUTABLE="$CONDA_PREFIX/bin/python3"
+  tp_c_mission turtlebot3_custom_simulation
 source install/setup.zsh
 ```
 
@@ -54,6 +65,13 @@ Si se borra un paquete después de sourcear el workspace en la misma terminal,
 `AMENT_PREFIX_PATH` y `CMAKE_PREFIX_PATH` conservan temporalmente la ruta eliminada
 y `colcon` avisa que no existe. Una terminal nueva evita esos warnings sin editar
 manualmente las variables de entorno.
+
+Si se actualizó el enlazado de `turtlebot3_custom_simulation`, forzá una
+reconfiguración portable sin borrar el resto del workspace:
+
+```bash
+colcon build --packages-select turtlebot3_custom_simulation --cmake-clean-cache
+```
 
 ---
 
@@ -169,6 +187,15 @@ ros2 topic pub --once /goal_pose geometry_msgs/msg/PoseStamped \
   pone `RMW_IMPLEMENTATION=rmw_cyclonedds_cpp` + `CYCLONEDDS_URI` apuntando a
   `scripts/cyclonedds_loopback.xml` (loopback unicast, `MaxAutoParticipantIndex=100`). **Todas las
   terminales** deben tener el mismo `source`.
+- **`/calc_odom` no publica:** primero comprobá que el nodo calculador siga vivo:
+  `ros2 node info /calculated_odometry` y luego
+  `ros2 topic echo --once /calc_odom`. El ejecutable publica aun estando quieto.
+  El smoke test automatizado se ejecuta, después del build y de sourcear el workspace, con
+  `RUN_ROS_SMOKE=1 python3 -m pytest
+  src/tp_b_navigation/test/test_calc_odom_smoke.py -q`.
+  En macOS, `otool -l install/turtlebot3_custom_simulation/lib/turtlebot3_custom_simulation/turtlebot3_custom_simulation`
+  debe mostrar un RPATH derivado del entorno ROS y nunca `/lib`; en Linux se puede inspeccionar
+  el mismo binario con `ldd`.
 - **No uses `ROS_LOCALHOST_ONLY=1`** con FastDDS: crashea gzserver (`foonathan::memory`).
 - **Reiniciaste Gazebo:** reiniciá también la pila de Parte B. Al reiniciar Gazebo el reloj de
   simulación vuelve a 0 y los nodos vivos quedan con TF viejas (`TF_OLD_DATA`) → planean con poses
