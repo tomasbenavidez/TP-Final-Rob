@@ -25,6 +25,7 @@ from rclpy.executors import ExternalShutdownException
 from rclpy.qos import (QoSProfile, DurabilityPolicy, ReliabilityPolicy,
                        HistoryPolicy, qos_profile_sensor_data)
 
+from geometry_msgs.msg import PoseWithCovarianceStamped
 from sensor_msgs.msg import LaserScan
 from nav_msgs.msg import OccupancyGrid
 from std_msgs.msg import Bool
@@ -42,6 +43,9 @@ class ObstacleMonitor(Node):
         self.declare_parameter('cone_halfangle', 0.6)   # semicono frontal (rad) ~34°
         self.declare_parameter('min_points', 3)         # puntos nuevos para disparar
         self.declare_parameter('dynamic_inflation_radius', 0.08)
+        # El cono rojo es un objeto NO mapeado: sin esto, el monitor lo marcaría
+        # como obstáculo dinámico y sellaría su entorno, bloqueando la aproximación.
+        self.declare_parameter('cone_clear_radius', 0.30)  # disco eximido (m)
         self.declare_parameter('global_frame', 'map')
         self.declare_parameter('base_frame', 'base_footprint')
 
@@ -49,6 +53,7 @@ class ObstacleMonitor(Node):
         self.cone = float(self.get_parameter('cone_halfangle').value)
         self.min_pts = int(self.get_parameter('min_points').value)
         self.dynamic_radius = float(self.get_parameter('dynamic_inflation_radius').value)
+        self.cone_clear_radius = float(self.get_parameter('cone_clear_radius').value)
         self.global_frame = self.get_parameter('global_frame').value
         self.base_frame = self.get_parameter('base_frame').value
 
@@ -58,6 +63,7 @@ class ObstacleMonitor(Node):
         self.W = self.H = 0
         self.occ = None  # bool [H,W] ocupado en el mapa
         self.dynamic = None
+        self.exempt = None  # bool [H,W]: celdas eximidas (cono rojo confirmado)
 
         qos_latched = QoSProfile(
             depth=1, history=HistoryPolicy.KEEP_LAST,
@@ -67,6 +73,8 @@ class ObstacleMonitor(Node):
         self.create_subscription(OccupancyGrid, '/map', self.map_cb, qos_latched)
         self.create_subscription(LaserScan, '/scan', self.scan_cb,
                                  qos_profile_sensor_data)
+        self.create_subscription(PoseWithCovarianceStamped, '/red_cone_pose',
+                                 self.cone_cb, 10)
         self.pub = self.create_publisher(Bool, '/obstacle_detected', 10)
         self.dynamic_pub = self.create_publisher(
             OccupancyGrid, '/dynamic_obstacles', qos_latched)
@@ -89,6 +97,7 @@ class ObstacleMonitor(Node):
             return
         self.occ = occ
         self.dynamic = np.zeros((self.H, self.W), dtype=bool)
+        self.exempt = np.zeros((self.H, self.W), dtype=bool)
         self._publish_dynamic()
 
     def scan_cb(self, scan: LaserScan):
@@ -137,11 +146,42 @@ class ObstacleMonitor(Node):
         inflation_cells = max(1, int(math.ceil(self.dynamic_radius / self.res)))
         changed, new_pts = mark_dynamic_obstacles(
             self.dynamic, self.occ, rows[inside], cols[inside], inflation_cells)
+        # El cono confirmado nunca entra a la capa de planificación, aunque el
+        # LIDAR lo siga viendo como retorno "nuevo".
+        if self.exempt is not None and self.exempt.any():
+            self.dynamic[self.exempt] = False
 
         detected = new_pts >= self.min_pts
         if changed:
             self._publish_dynamic()
         self.pub.publish(Bool(data=bool(detected)))
+
+    def cone_cb(self, msg: PoseWithCovarianceStamped):
+        """Exime un disco alrededor del cono confirmado de la capa dinámica.
+
+        El cono es el objetivo de la misión, no un obstáculo a rodear: si quedara
+        marcado en /dynamic_obstacles, el global_planner sellaría su entorno y la
+        aproximación nunca podría planearse. Limpiamos lo ya marcado y evitamos
+        que se vuelva a marcar.
+        """
+        if self.exempt is None or self.res is None:
+            return
+        col = int((msg.pose.pose.position.x - self.ox) / self.res)
+        row = int((msg.pose.pose.position.y - self.oy) / self.res)
+        radius = max(1, int(math.ceil(self.cone_clear_radius / self.res)))
+        changed = False
+        for rr in range(max(0, row - radius), min(self.H, row + radius + 1)):
+            for cc in range(max(0, col - radius), min(self.W, col + radius + 1)):
+                if (rr - row) ** 2 + (cc - col) ** 2 > radius ** 2:
+                    continue
+                if not self.exempt[rr, cc]:
+                    self.exempt[rr, cc] = True
+                    changed = True
+                if self.dynamic[rr, cc]:
+                    self.dynamic[rr, cc] = False
+                    changed = True
+        if changed:
+            self._publish_dynamic()
 
     def _publish_dynamic(self):
         if self.map is None or self.dynamic is None:

@@ -100,6 +100,37 @@ ros2 launch tp_slam_aruco parte_a_mapa.launch.py \
 
 La salida es `/tmp/mapa.pgm` + `/tmp/mapa.yaml`.
 
+Para visualizar el mapa generado en RViz, podés cargarlo con `nav2_map_server` y luego abrir RViz:
+
+Terminal 1:
+```bash
+source install/setup.bash
+ros2 run nav2_map_server map_server --ros-args \
+  -p yaml_filename:=/tmp/mapa.yaml
+```
+
+Terminal 2:
+```bash
+source install/setup.bash
+ros2 lifecycle set /map_server configure
+
+ros2 lifecycle set /map_server activate
+```
+
+
+```bash
+
+Terminal 3:
+source install/setup.bash
+rviz2
+```
+
+En RViz2:
+
+1. Poner `Fixed Frame` en `map`.
+2. Agregar un display `Map` apuntando a `/map`.
+3. Si el mapa no aparece enseguida, cambiar `Durability Policy` a `Transient Local`.
+
 Para usar un mapa regenerado como default de Parte B, reemplazá `mapas/map.pgm` y `mapas/map.yaml` y repetí `colcon build --packages-select tp_b_navigation`. Para probarlo sin reemplazar archivos, pasalo directamente con `map_yaml:=/tmp/mapa.yaml`.
 
 ## Parte B — navegar dentro del mapa
