@@ -34,7 +34,10 @@ class ArucoMclAdapter(Node):
         self.declare_parameter('detections_topic', '/aruco_detections')
         self.declare_parameter('output_topic', '/observed_landmark_ids')
         self.declare_parameter('base_frame', 'base_link')
+        self.declare_parameter('allow_latest_tf_fallback', False)
         self.base_frame = self.get_parameter('base_frame').value
+        self.allow_latest_tf_fallback = bool(
+            self.get_parameter('allow_latest_tf_fallback').value)
         self.tf_buffer = Buffer()
         self.tf_listener = TransformListener(self.tf_buffer, self)
         self.publisher = self.create_publisher(
@@ -54,17 +57,12 @@ class ArucoMclAdapter(Node):
         output.header.frame_id = self.base_frame
         for marker in msg.markers:
             try:
-                transform = self.tf_buffer.lookup_transform(
-                    self.base_frame, marker.header.frame_id, rclpy.time.Time())
+                point, used_fallback = self.transform_marker(marker)
             except Exception as exc:  # noqa: BLE001
                 self.get_logger().warn(
                     f'Sin TF {marker.header.frame_id}->{self.base_frame}: {exc}',
                     throttle_duration_sec=2.0)
                 continue
-            point = _transform_point(
-                (marker.pose.position.x, marker.pose.position.y,
-                 marker.pose.position.z),
-                transform)
             observation = LandmarkObservation()
             observation.header = marker.header
             observation.landmark_id = int(marker.id)
@@ -74,10 +72,38 @@ class ArucoMclAdapter(Node):
             observation.bearing_rad = float(math.atan2(point[1], point[0]))
             observation.depth_m = float(marker.pose.position.z)
             observation.reprojection_error_px = 0.0
-            observation.used_fallback_tf = False
+            observation.used_fallback_tf = used_fallback
             observation.source_frame = marker.header.frame_id
             output.observations.append(observation)
         self.publisher.publish(output)
+
+    def transform_marker(self, marker):
+        measurement_time = rclpy.time.Time.from_msg(marker.header.stamp)
+        try:
+            transform = self.tf_buffer.lookup_transform(
+                self.base_frame,
+                marker.header.frame_id,
+                measurement_time,
+            )
+            used_fallback = False
+        except Exception:
+            if not self.allow_latest_tf_fallback:
+                raise
+            transform = self.tf_buffer.lookup_transform(
+                self.base_frame,
+                marker.header.frame_id,
+                rclpy.time.Time(),
+            )
+            used_fallback = True
+        point = _transform_point(
+            (
+                marker.pose.position.x,
+                marker.pose.position.y,
+                marker.pose.position.z,
+            ),
+            transform,
+        )
+        return point, used_fallback
 
 
 def main(args=None):

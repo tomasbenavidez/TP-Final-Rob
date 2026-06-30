@@ -212,6 +212,8 @@ class MissionManager(Node):
     def vision_cb(self, msg):
         if msg.data:
             self.last_vision_at = self.get_clock().now()
+        else:
+            self.last_vision_at = None
 
     def start_cb(self, _request, response):
         block_reason = self._start_block_reason()

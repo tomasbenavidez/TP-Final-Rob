@@ -89,7 +89,10 @@ def generate_launch_description():
 
     detector = Node(
         package='tp_c_mission', executable='red_cone_detector', output='screen',
-        parameters=[config, {'use_sim_time': True}])
+        parameters=[config, {
+            'use_sim_time': True,
+            'require_aligned_depth': False,
+        }])
     manager = Node(
         package='tp_c_mission', executable='mission_manager', output='screen',
         parameters=[config, {'use_sim_time': True, 'auto_start': auto_start}])

@@ -64,6 +64,7 @@ def _launch_nodes(context, config, rviz_config):
                 'rgb_topic': rgb,
                 'depth_topic': depth,
                 'camera_info_topic': info,
+                'require_aligned_depth': False,
             }]),
         Node(
             package='tp_a_slam_aruco', executable='tf_bridge', output='screen',

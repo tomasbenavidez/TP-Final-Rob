@@ -17,6 +17,37 @@ from tp_c_mission.cone_perception import (
 )
 
 
+def evaluate_vision_readiness(
+    *,
+    rgb_fresh,
+    camera_info_valid,
+    rgb_shape,
+    camera_info_shape,
+    depth_shape,
+    rgb_stamp,
+    depth_stamp,
+    max_depth_age,
+    tf_available,
+    require_aligned_depth,
+):
+    if not rgb_fresh:
+        return 'rgb_stale'
+    if not camera_info_valid:
+        return 'camera_info_invalid'
+    if camera_info_shape != rgb_shape:
+        return 'camera_info_misaligned'
+    if require_aligned_depth:
+        if depth_shape is None or depth_stamp is None:
+            return 'depth_missing'
+        if depth_shape != rgb_shape:
+            return 'depth_misaligned'
+        if abs(rgb_stamp - depth_stamp) > max_depth_age:
+            return 'depth_stale'
+    if not tf_available:
+        return 'tf_unavailable'
+    return None
+
+
 class ConeDetector(Node):
     def __init__(self):
         super().__init__('red_cone_detector')
@@ -34,6 +65,8 @@ class ConeDetector(Node):
             'max_depth_m': 5.0,
             'depth_scale': 0.001,
             'max_depth_age': 0.20,
+            'require_aligned_depth': False,
+            'allow_latest_tf_fallback': False,
             'hue_low': 10, 'hue_high': 170,
             'min_saturation': 100, 'min_value': 70,
             'morphology_radius': 1,
@@ -55,6 +88,8 @@ class ConeDetector(Node):
         self.max_depth = float(get('max_depth_m'))
         self.depth_scale = float(get('depth_scale'))
         self.max_depth_age = float(get('max_depth_age'))
+        self.require_aligned_depth = bool(get('require_aligned_depth'))
+        self.allow_latest_tf_fallback = bool(get('allow_latest_tf_fallback'))
         self.hsv = (
             int(get('hue_low')), int(get('hue_high')),
             int(get('min_saturation')), int(get('min_value')),
@@ -96,14 +131,46 @@ class ConeDetector(Node):
         self.depth_stamp = _stamp_seconds(msg.header.stamp)
 
     def info_cb(self, msg):
-        if len(msg.k) == 9 and msg.k[0] > 0 and msg.k[4] > 0:
+        if (
+            len(msg.k) == 9
+            and msg.k[0] > 0
+            and msg.k[4] > 0
+            and msg.width > 0
+            and msg.height > 0
+        ):
             self.camera_info = msg
 
     def rgb_cb(self, msg):
         image = np.asarray(self.bridge.imgmsg_to_cv2(msg, desired_encoding='bgr8'))
-        ready = self.camera_info is not None and self.tf_buffer.can_transform(
-            self.global_frame, msg.header.frame_id, rclpy.time.Time())
-        self.ready_pub.publish(Bool(data=bool(ready)))
+        measurement_time = rclpy.time.Time.from_msg(msg.header.stamp)
+        tf_available = self.tf_buffer.can_transform(
+            self.global_frame,
+            msg.header.frame_id,
+            measurement_time,
+        )
+        if not tf_available and self.allow_latest_tf_fallback:
+            tf_available = self.tf_buffer.can_transform(
+                self.global_frame,
+                msg.header.frame_id,
+                rclpy.time.Time(),
+            )
+        camera_info_shape = (
+            None if self.camera_info is None
+            else (self.camera_info.height, self.camera_info.width)
+        )
+        ready_reason = evaluate_vision_readiness(
+            rgb_fresh=True,
+            camera_info_valid=self.camera_info is not None,
+            rgb_shape=image.shape[:2],
+            camera_info_shape=camera_info_shape,
+            depth_shape=None if self.depth is None else self.depth.shape,
+            rgb_stamp=_stamp_seconds(msg.header.stamp),
+            depth_stamp=self.depth_stamp,
+            max_depth_age=self.max_depth_age,
+            tf_available=tf_available,
+            require_aligned_depth=self.require_aligned_depth,
+        )
+        self.ready_pub.publish(Bool(data=ready_reason is None))
         detections, mask = detect_red_regions(
             image, min_area=self.min_area, hue_low=self.hsv[0],
             hue_high=self.hsv[1], min_saturation=self.hsv[2],
@@ -119,7 +186,12 @@ class ConeDetector(Node):
         mask_msg.header = msg.header
         self.mask_pub.publish(mask_msg)
 
-        if confirmed is None or region is None or self.camera_info is None:
+        if (
+            confirmed is None
+            or region is None
+            or self.camera_info is None
+            or (self.require_aligned_depth and ready_reason is not None)
+        ):
             return
         depth_values = np.array([], dtype=float)
         rgb_stamp = _stamp_seconds(msg.header.stamp)
@@ -151,8 +223,10 @@ class ConeDetector(Node):
         camera_point = pixel_to_camera(
             confirmed[0], confirmed[1], distance, k[0], k[4], k[2], k[5])
         try:
-            transform = self.tf_buffer.lookup_transform(
-                self.global_frame, msg.header.frame_id, rclpy.time.Time())
+            transform = self._lookup_transform(
+                msg.header.frame_id,
+                measurement_time,
+            )
         except Exception as exc:  # noqa: BLE001
             self.get_logger().warn(f'Sin TF cámara→{self.global_frame}: {exc}',
                                    throttle_duration_sec=2.0)
@@ -189,6 +263,22 @@ class ConeDetector(Node):
         output.pose.covariance[7] = sigma ** 2
         output.pose.covariance[14] = (2.0 * sigma) ** 2
         self.pose_pub.publish(output)
+
+    def _lookup_transform(self, source_frame, measurement_time):
+        try:
+            return self.tf_buffer.lookup_transform(
+                self.global_frame,
+                source_frame,
+                measurement_time,
+            )
+        except Exception:
+            if not self.allow_latest_tf_fallback:
+                raise
+            return self.tf_buffer.lookup_transform(
+                self.global_frame,
+                source_frame,
+                rclpy.time.Time(),
+            )
 
 
 def _transform_point(point, transform):
