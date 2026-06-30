@@ -28,7 +28,7 @@ Linux:
 ```bash
 cd tp_final_ws
 colcon build --packages-select \
-  tp_interfaces tp_a_slam_aruco tp_b_navigation \
+  tp_platform tp_interfaces tp_a_slam_aruco tp_b_navigation \
   tp_c_mission turtlebot3_custom_simulation
 source install/setup.bash
 ```
@@ -39,7 +39,7 @@ macOS/RoboStack:
 rosenv
 cd tp_final_ws
 colcon build --packages-select \
-  tp_interfaces tp_a_slam_aruco tp_b_navigation \
+  tp_platform tp_interfaces tp_a_slam_aruco tp_b_navigation \
   tp_c_mission turtlebot3_custom_simulation
 source install/setup.zsh
 ```
@@ -55,7 +55,7 @@ Para reconstruir `tp_interfaces` desde cero, abrí una terminal nueva, ejecutá
 cd tp_final_ws
 rm -rf build/tp_interfaces install/tp_interfaces
 colcon build --packages-select \
-  tp_interfaces tp_a_slam_aruco tp_b_navigation \
+  tp_platform tp_interfaces tp_a_slam_aruco tp_b_navigation \
   tp_c_mission turtlebot3_custom_simulation \
   --cmake-args -DPython3_EXECUTABLE="$CONDA_PREFIX/bin/python3"
 source install/setup.zsh
@@ -115,6 +115,31 @@ global_planner, obstacle_monitor, state_machine) **+ RViz** con la config de Par
 Argumentos útiles:
 - `launch_rviz:=false` — no abrir RViz (si querés abrirlo aparte).
 - `map_yaml:=/ruta/otro_map.yaml` — usar otro mapa.
+
+### Perfil real TB4
+
+Para ejecutar Parte B sobre el mapa aceptado de Parte A:
+
+```bash
+source tp_final_ws/install/setup.bash
+ros2 launch tp_b_navigation parte_b.launch.py \
+  profile:=real_tb4 \
+  robot_namespace:=tb4_0 \
+  map_yaml:=/tmp/tb4-run/map/map.yaml \
+  landmark_map_file:=/tmp/tb4-run/parte_a/trayectoria.json
+```
+
+El perfil real usa `/tb4_0/odom`, `/tb4_0/scan`, `/tb4_0/cmd_vel` y la cámara
+OAK-D derivadas de `robot_namespace`. Agrega `aruco_detector` y
+`aruco_mcl_adapter` para alimentar `/observed_landmark_ids` al MCL. No inicia
+`landmark_publisher`, `landmark_sensor`, `/calc_odom`, drivers TB4 ni Graph SLAM.
+
+Si `map_yaml` o `landmark_map_file` quedan en defaults flexibles, el launch avisa
+por consola. En `real_tb4` quedan activos los safety gates:
+`enable_safety_gates`, `max_mcl_pose_age`, `max_scan_age`,
+`max_position_covariance` y `max_yaw_covariance`. Estos gates frenan movimiento
+autónomo e inserción de obstáculos dinámicos si la pose MCL, la covarianza, la TF
+o el scan no son confiables.
 
 ---
 

@@ -10,7 +10,22 @@ from tf2_ros import Buffer, TransformListener
 from visualization_msgs.msg import MarkerArray
 
 from tp_interfaces.msg import LandmarkObservation, LandmarkObservationArray
-from tp_c_mission.cone_detector_node import _transform_point
+
+
+def _transform_point(point, transform):
+    x, y, z = point
+    q = transform.transform.rotation
+    translation = transform.transform.translation
+    tx, ty, tz = translation.x, translation.y, translation.z
+    ix = q.w * x + q.y * z - q.z * y
+    iy = q.w * y + q.z * x - q.x * z
+    iz = q.w * z + q.x * y - q.y * x
+    iw = -q.x * x - q.y * y - q.z * z
+    return (
+        ix * q.w + iw * -q.x + iy * -q.z - iz * -q.y + tx,
+        iy * q.w + iw * -q.y + iz * -q.x - ix * -q.z + ty,
+        iz * q.w + iw * -q.z + ix * -q.y - iy * -q.x + tz,
+    )
 
 
 class ArucoMclAdapter(Node):
@@ -43,11 +58,12 @@ class ArucoMclAdapter(Node):
                     self.base_frame, marker.header.frame_id, rclpy.time.Time())
             except Exception as exc:  # noqa: BLE001
                 self.get_logger().warn(
-                    f'Sin TF {marker.header.frame_id}→{self.base_frame}: {exc}',
+                    f'Sin TF {marker.header.frame_id}->{self.base_frame}: {exc}',
                     throttle_duration_sec=2.0)
                 continue
             point = _transform_point(
-                (marker.pose.position.x, marker.pose.position.y, marker.pose.position.z),
+                (marker.pose.position.x, marker.pose.position.y,
+                 marker.pose.position.z),
                 transform)
             observation = LandmarkObservation()
             observation.header = marker.header

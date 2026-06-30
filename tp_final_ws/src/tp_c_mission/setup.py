@@ -26,6 +26,5 @@ setup(
     entry_points={'console_scripts': [
         'red_cone_detector = tp_c_mission.cone_detector_node:main',
         'mission_manager = tp_c_mission.mission_manager_node:main',
-        'aruco_mcl_adapter = tp_c_mission.aruco_mcl_adapter:main',
     ]},
 )

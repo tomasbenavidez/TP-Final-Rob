@@ -13,7 +13,7 @@ Máquina de estados (ver docs/context/04_arquitectura_parte_b.md):
     FOLLOWING/ALIGNING/GOAL_REACHED --goal_pose nuevo--> PLANNING (re-planea, 1.8)
     GOAL_REACHED --> WAITING_GOAL
 
-Entradas: /initialpose, /goal_pose, /plan, /plan_status, /obstacle_detected, TF map->base.
+Entradas: goals, plan, obstacle/monitor health, /scan, /mcl_pose y TF map->base.
 Salidas:  /cmd_vel, /nav_state (String, para RViz/consola), /plan_request.
 """
 
@@ -25,9 +25,17 @@ from rclpy.executors import ExternalShutdownException
 
 from geometry_msgs.msg import Twist, PoseStamped, PoseWithCovarianceStamped
 from nav_msgs.msg import Path
+from sensor_msgs.msg import LaserScan
 from std_msgs.msg import Bool, String, Empty
+from rclpy.qos import qos_profile_sensor_data
 from tf2_ros import Buffer, TransformListener
 
+from tp_b_navigation.safety_gates import (
+    SafetyGateConfig,
+    localization_gate,
+    monitor_gate,
+    scan_gate,
+)
 from tp_b_navigation.utils import angle_diff, yaw_from_quaternion
 
 
@@ -62,6 +70,12 @@ class StateMachine(Node):
         self.declare_parameter('avoid_back_v', -0.07)    # retroceso de evasión (m/s)
         self.declare_parameter('global_frame', 'map')
         self.declare_parameter('base_frame', 'base_footprint')
+        self.declare_parameter('enable_safety_gates', False)
+        self.declare_parameter('max_mcl_pose_age', 1.0)
+        self.declare_parameter('max_scan_age', 1.0)
+        self.declare_parameter('max_monitor_age', 1.0)
+        self.declare_parameter('max_position_covariance', 0.25)
+        self.declare_parameter('max_yaw_covariance', 0.5)
 
         g = self.get_parameter
         self.v_max = float(g('v_max').value)
@@ -78,6 +92,14 @@ class StateMachine(Node):
         self.avoid_back_v = float(g('avoid_back_v').value)
         self.global_frame = g('global_frame').value
         self.base_frame = g('base_frame').value
+        self.safety_config = SafetyGateConfig(
+            enabled=bool(g('enable_safety_gates').value),
+            max_mcl_pose_age=float(g('max_mcl_pose_age').value),
+            max_scan_age=float(g('max_scan_age').value),
+            max_monitor_age=float(g('max_monitor_age').value),
+            max_position_covariance=float(g('max_position_covariance').value),
+            max_yaw_covariance=float(g('max_yaw_covariance').value),
+        )
 
         # --- estado interno ---
         self.state = IDLE
@@ -89,6 +111,12 @@ class StateMachine(Node):
         self.obstacle = False
         self.t_enter = self.now()   # tiempo de entrada al estado actual
         self.tf_ok_since = None     # primer instante con TF map->base disponible
+        self.last_mcl_pose_stamp = None
+        self.last_mcl_covariance = None
+        self.last_scan_stamp = None
+        self.last_monitor_stamp = None
+        self.monitor_healthy = None
+        self.last_safety_reason = None
 
         # --- pub/sub ---
         self.create_subscription(PoseWithCovarianceStamped, '/initialpose',
@@ -99,6 +127,12 @@ class StateMachine(Node):
         self.create_subscription(Path, '/plan', self.plan_cb, 10)
         self.create_subscription(Bool, '/plan_status', self.plan_status_cb, 10)
         self.create_subscription(Bool, '/obstacle_detected', self.obstacle_cb, 10)
+        self.create_subscription(
+            Bool, '/obstacle_monitor_healthy', self.monitor_health_cb, 10)
+        self.create_subscription(
+            LaserScan, '/scan', self.scan_cb, qos_profile_sensor_data)
+        self.create_subscription(PoseWithCovarianceStamped, '/mcl_pose',
+                                 self.mcl_pose_cb, 10)
 
         self.pub_cmd = self.create_publisher(Twist, '/cmd_vel', 10)
         self.pub_state = self.create_publisher(String, '/nav_state', 10)
@@ -143,6 +177,52 @@ class StateMachine(Node):
         t.linear.x = float(max(-self.v_max, min(self.v_max, v)))
         t.angular.z = float(max(-self.w_max, min(self.w_max, w)))
         self.pub_cmd.publish(t)
+
+    def _stamp_to_seconds(self, stamp):
+        return float(stamp.sec) + float(stamp.nanosec) * 1e-9
+
+    def localization_block_reason(self):
+        return localization_gate(
+            now_s=self.now(),
+            last_pose_stamp_s=self.last_mcl_pose_stamp,
+            covariance=self.last_mcl_covariance,
+            config=self.safety_config,
+        )
+
+    def localization_safe(self):
+        reason = self.localization_block_reason()
+        if reason is None:
+            self.last_safety_reason = None
+            return True
+        if reason != self.last_safety_reason:
+            self.get_logger().warn(
+                f'Safety gate bloquea movimiento autonomo: {reason}')
+            self.last_safety_reason = reason
+        return False
+
+    def navigation_block_reason(self):
+        now = self.now()
+        reason = localization_gate(
+            now, self.last_mcl_pose_stamp, self.last_mcl_covariance,
+            self.safety_config)
+        if reason is None:
+            reason = scan_gate(now, self.last_scan_stamp, self.safety_config)
+        if reason is None:
+            reason = monitor_gate(
+                now, self.last_monitor_stamp, self.monitor_healthy,
+                self.safety_config)
+        return reason
+
+    def navigation_safe(self):
+        reason = self.navigation_block_reason()
+        if reason is None:
+            self.last_safety_reason = None
+            return True
+        if reason != self.last_safety_reason:
+            self.get_logger().warn(
+                f'Safety gate bloquea movimiento autonomo: {reason}')
+            self.last_safety_reason = reason
+        return False
 
     # --------------------------------------------------------------- callbacks
     def initialpose_cb(self, msg):
@@ -196,12 +276,26 @@ class StateMachine(Node):
     def obstacle_cb(self, msg: Bool):
         self.obstacle = bool(msg.data)
 
+    def monitor_health_cb(self, msg: Bool):
+        self.last_monitor_stamp = self.now()
+        self.monitor_healthy = bool(msg.data)
+
+    def scan_cb(self, msg: LaserScan):
+        self.last_scan_stamp = self._stamp_to_seconds(msg.header.stamp)
+
+    def mcl_pose_cb(self, msg: PoseWithCovarianceStamped):
+        self.last_mcl_pose_stamp = self._stamp_to_seconds(msg.header.stamp)
+        self.last_mcl_covariance = msg.pose.covariance
+
     # --------------------------------------------------------------- request de plan
     def request_plan(self):
         if self.goal is None:
             return
         self.plan_ok = None
         self.path = None
+        if not self.navigation_safe():
+            self.stop()
+            return
         req = PoseStamped()
         req.header.frame_id = self.global_frame
         req.header.stamp = self.get_clock().now().to_msg()
@@ -210,6 +304,12 @@ class StateMachine(Node):
 
     # --------------------------------------------------------------- bucle FSM
     def loop(self):
+        if (self.safety_config.enabled
+                and self.state in (PLANNING, FOLLOWING, AVOIDING, ALIGNING_ANGLE)
+                and not self.navigation_safe()):
+            self.stop()
+            return
+
         # re-planeo por goal nuevo (1.8): salvo si todavía estamos localizando
         if self.new_goal and self.state not in (IDLE, LOCALIZING):
             self.new_goal = False
@@ -237,6 +337,8 @@ class StateMachine(Node):
 
         elif self.state == PLANNING:
             self.stop()
+            if not self.navigation_safe():
+                return
             if self.plan_ok is True and self.path:
                 self.set_state(FOLLOWING)
             elif self.plan_ok is False or (self.now() - self.t_enter > self.plan_timeout):
@@ -272,6 +374,9 @@ class StateMachine(Node):
 
     # --------------------------------------------------------------- comportamientos
     def follow(self):
+        if not self.navigation_safe():
+            self.stop()
+            return
         pose = self.robot_pose()
         if pose is None or not self.path:
             self.stop()
@@ -299,6 +404,12 @@ class StateMachine(Node):
         self.drive(v, w)
 
     def avoid(self):
+        if not self.navigation_safe():
+            self.stop()
+            return
+        if self.robot_pose() is None:
+            self.stop()
+            return
         # maniobra reactiva: frenar, retroceder y girar un tiempo; luego re-planear
         elapsed = self.now() - self.t_enter
         if elapsed < self.avoid_time:
@@ -309,6 +420,9 @@ class StateMachine(Node):
             self.set_state(PLANNING)
 
     def align_final(self):
+        if not self.navigation_safe():
+            self.stop()
+            return
         pose = self.robot_pose()
         if pose is None or self.goal is None:
             self.stop()

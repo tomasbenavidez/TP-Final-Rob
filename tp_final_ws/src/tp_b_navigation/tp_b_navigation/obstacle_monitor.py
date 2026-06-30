@@ -12,7 +12,7 @@ dentro de un cono frontal y a corta distancia, se proyecta el punto al frame `ma
 Si hay suficientes puntos "nuevos" cerca y al frente, se publica /obstacle_detected=True.
 
 Entradas: /scan, /map (latcheado), TF map->base_frame.
-Salidas:  /obstacle_detected (std_msgs/Bool), /dynamic_obstacles (OccupancyGrid).
+Salidas: /obstacle_detected, /obstacle_monitor_healthy y /dynamic_obstacles.
 """
 
 import math
@@ -33,6 +33,11 @@ from std_msgs.msg import Bool
 from tf2_ros import Buffer, TransformListener
 
 from tp_b_navigation.dynamic_obstacles import mark_dynamic_obstacles, same_static_occupancy
+from tp_b_navigation.safety_gates import (
+    SafetyGateConfig,
+    localization_gate,
+    scan_gate,
+)
 from tp_b_navigation.scan_projection import transform_scan_points
 from tp_b_navigation.utils import yaw_from_quaternion
 
@@ -57,6 +62,11 @@ class ObstacleMonitor(Node):
         self.declare_parameter('cone_clear_radius', 0.30)  # disco eximido (m)
         self.declare_parameter('global_frame', 'map')
         self.declare_parameter('base_frame', 'base_footprint')
+        self.declare_parameter('enable_safety_gates', False)
+        self.declare_parameter('max_mcl_pose_age', 1.0)
+        self.declare_parameter('max_scan_age', 1.0)
+        self.declare_parameter('max_position_covariance', 0.25)
+        self.declare_parameter('max_yaw_covariance', 0.5)
 
         self.danger = float(self.get_parameter('danger_dist').value)
         self.cone = float(self.get_parameter('cone_halfangle').value)
@@ -66,6 +76,14 @@ class ObstacleMonitor(Node):
         self.cone_clear_radius = float(self.get_parameter('cone_clear_radius').value)
         self.global_frame = self.get_parameter('global_frame').value
         self.base_frame = self.get_parameter('base_frame').value
+        self.safety_config = SafetyGateConfig(
+            enabled=bool(self.get_parameter('enable_safety_gates').value),
+            max_mcl_pose_age=float(self.get_parameter('max_mcl_pose_age').value),
+            max_scan_age=float(self.get_parameter('max_scan_age').value),
+            max_position_covariance=float(
+                self.get_parameter('max_position_covariance').value),
+            max_yaw_covariance=float(self.get_parameter('max_yaw_covariance').value),
+        )
 
         self.map = None
         self.res = None
@@ -75,6 +93,9 @@ class ObstacleMonitor(Node):
         self.dynamic = None
         self.last_seen = None  # float [H,W]: instante (s) de última observación por celda
         self.exempt = None  # bool [H,W]: celdas eximidas (cono rojo confirmado)
+        self.last_mcl_pose_stamp = None
+        self.last_mcl_covariance = None
+        self.last_safety_reason = None
 
         qos_latched = QoSProfile(
             depth=1, history=HistoryPolicy.KEEP_LAST,
@@ -84,9 +105,13 @@ class ObstacleMonitor(Node):
         self.create_subscription(OccupancyGrid, '/map', self.map_cb, qos_latched)
         self.create_subscription(LaserScan, '/scan', self.scan_cb,
                                  qos_profile_sensor_data)
+        self.create_subscription(PoseWithCovarianceStamped, '/mcl_pose',
+                                 self.mcl_pose_cb, 10)
         self.create_subscription(PoseWithCovarianceStamped, '/red_cone_pose',
                                  self.cone_cb, 10)
         self.pub = self.create_publisher(Bool, '/obstacle_detected', 10)
+        self.health_pub = self.create_publisher(
+            Bool, '/obstacle_monitor_healthy', 10)
         self.dynamic_pub = self.create_publisher(
             OccupancyGrid, '/dynamic_obstacles', qos_latched)
 
@@ -117,6 +142,34 @@ class ObstacleMonitor(Node):
 
     def _now(self):
         return self.get_clock().now().nanoseconds * 1e-9
+
+    @staticmethod
+    def _stamp_to_seconds(stamp):
+        return float(stamp.sec) + float(stamp.nanosec) * 1e-9
+
+    def _warn_safety_once(self, reason):
+        if reason == self.last_safety_reason:
+            return
+        self.get_logger().warn(
+            f'Safety gate bloquea insercion de obstaculos dinamicos: {reason}')
+        self.last_safety_reason = reason
+
+    def _safety_block_reason(self, scan):
+        now = self._now()
+        scan_stamp = self._stamp_to_seconds(scan.header.stamp)
+        reason = scan_gate(now, scan_stamp, self.safety_config)
+        if reason is not None:
+            return reason
+        return localization_gate(
+            now_s=now,
+            last_pose_stamp_s=self.last_mcl_pose_stamp,
+            covariance=self.last_mcl_covariance,
+            config=self.safety_config,
+        )
+
+    def mcl_pose_cb(self, msg: PoseWithCovarianceStamped):
+        self.last_mcl_pose_stamp = self._stamp_to_seconds(msg.header.stamp)
+        self.last_mcl_covariance = msg.pose.covariance
 
     @staticmethod
     def _transform_to_planar_pose(transform):
@@ -151,16 +204,26 @@ class ObstacleMonitor(Node):
 
     def scan_cb(self, scan: LaserScan):
         if self.occ is None:
+            self.health_pub.publish(Bool(data=False))
             return
+        reason = self._safety_block_reason(scan)
+        if reason is not None:
+            self.pub.publish(Bool(data=False))
+            self.health_pub.publish(Bool(data=False))
+            self._warn_safety_once(reason)
+            return
+        self.last_safety_reason = None
         try:
             base_from_sensor, map_from_sensor = self._lookup_scan_poses(scan)
         except Exception as exc:  # noqa: BLE001
             self.scans_skipped_no_tf += 1
+            self.health_pub.publish(Bool(data=False))
             self.get_logger().warn(
                 f'TF para proyectar scan {scan.header.frame_id} no disponible: {exc}',
                 throttle_duration_sec=2.0,
             )
             return  # sin localización todavía: no podemos discriminar mapeado/no-mapeado
+        self.health_pub.publish(Bool(data=True))
 
         ranges = np.asarray(scan.ranges, dtype=float)
         if ranges.size == 0:

@@ -41,6 +41,7 @@ setup(
             'global_planner = tp_b_navigation.global_planner:main',
             'obstacle_monitor = tp_b_navigation.obstacle_monitor:main',
             'state_machine = tp_b_navigation.state_machine:main',
+            'aruco_mcl_adapter = tp_b_navigation.aruco_mcl_adapter:main',
         ],
     },
 )
