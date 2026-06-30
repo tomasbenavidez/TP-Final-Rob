@@ -1,25 +1,27 @@
-# Borrador de runbook de laboratorio TB4
+# Runbook final de laboratorio TB4
 
-**Estado:** borrador operativo inicial para Task 1.
+**Estado:** procedimiento final ejecutable. Las validaciones B2/B3 y C1/C2/C3
+requieren el TurtleBot4 fisico y se registran como checkpoints manuales.
 
 **Alcance:** flujo real de laboratorio con TurtleBot4, desde una sesion limpia
-hasta la retencion de artefactos. Este documento no cambia launch files,
-paquetes, mensajes, parametros ni algoritmos.
+hasta la retencion de artefactos. Los launch files aceptan `robot_namespace`
+para seleccionar `tb4_0` o `tb4_1` una vez por corrida.
 
 **Fuentes:** `docs/2026-06-30-tb4-laboratory-workflow-design.md` y
 `docs/2026-06-30-tb4-laboratory-workflow-implementation.md`.
 
-## 0. Advertencias del baseline actual
+## 0. Contratos de ejecucion
 
-- El soporte robusto de namespaces `tb4_0` y `tb4_1` todavia se implementa en
-  una rama futura. En este borrador, cada comando usa `ROBOT_NS` como entrada
-  de la sesion y marca las excepciones donde el codigo actual sigue teniendo
-  defaults orientados a `tb4_0`.
-- `ros2 run tp_a_slam_aruco check_bag_contract` existe, pero actualmente valida
-  un contrato fijo `/tb4_0/*`. No usarlo como verificador final para `tb4_1`
-  hasta que la rama de namespace soporte un argumento de namespace.
-- Parte B real aun no tiene un perfil final separado. No lanzar
-  `parte_b.launch.py` de simulacion directamente sobre el TB4 real.
+- El soporte de namespaces `tb4_0` y `tb4_1` se selecciona con
+  `robot_namespace`. `tb4_0` sigue siendo el default de compatibilidad.
+- `ros2 run tp_a_slam_aruco check_bag_contract` acepta
+  `--robot-namespace tb4_0|tb4_1` y valida el contrato del robot elegido.
+- Parte B real se lanza con `profile:=real_tb4`; este perfil no inicia el sensor
+  virtual de landmarks y activa los safety gates.
+- Parte C real usa mapa y landmarks del mismo `RUN_ID`, y un topico depth
+  alineado con RGB validado antes de iniciar la mision.
+- `state_machine` es el unico productor normal de velocidad. Un operador puede
+  publicar un `Twist` cero como parada manual.
 - Este documento evita comandos de Gazebo en la ruta principal. La simulacion
   queda fuera del procedimiento real de laboratorio.
 
@@ -50,6 +52,7 @@ export TF_TOPIC="${ROBOT_NS}/tf"
 export TF_STATIC_TOPIC="${ROBOT_NS}/tf_static"
 export RGB_TOPIC="${ROBOT_NS}/oakd/rgb/preview/image_raw"
 export CAMERA_INFO_TOPIC="${ROBOT_NS}/oakd/rgb/preview/camera_info"
+export DEPTH_TOPIC=""  # completar en C1 con depth metrico alineado con RGB
 export CMD_VEL_TOPIC="${ROBOT_NS}/cmd_vel"
 
 mkdir -p \
@@ -80,7 +83,7 @@ artifact_root: ${RUN_ROOT}
 EOF
 ```
 
-## 2. Preparar la notebook
+## 2. Preparar la notebook y las terminales
 
 Partir de una terminal limpia en la notebook Linux del laboratorio. No iniciar
 drivers del robot desde la notebook.
@@ -88,11 +91,25 @@ drivers del robot desde la notebook.
 ```bash
 [Notebook laboratorio]
 cd /ruta/al/checkout/TP-Final-Rob
+source "${HOME}/miniforge3/etc/profile.d/conda.sh"
+conda activate rosenv_mf
 cd tp_final_ws
-colcon build --packages-select tp_interfaces tp_a_slam_aruco \
+colcon build --packages-select tp_platform tp_interfaces tp_a_slam_aruco \
   tp_b_navigation tp_c_mission turtlebot3_custom_simulation
 source install/setup.bash
 ```
+
+Repetir `conda activate rosenv_mf` y `source install/setup.bash` en cada
+terminal. Layout recomendado:
+
+| Terminal | Uso |
+|---|---|
+| N1 | discovery, topicos y parada manual |
+| N2 | bag play o launch principal |
+| N3 | RViz y observacion de estados |
+| N4 | SSH al TB4 durante adquisicion |
+
+No mezclar una terminal con `use_sim_time` residual y una corrida real.
 
 Confirmar que la notebook usa el dominio y RMW esperados por el laboratorio.
 Los valores concretos dependen de la red del dia.
@@ -139,6 +156,7 @@ y cualquier otro productor normal de velocidad.
 [Notebook laboratorio]
 ros2 topic info "${CMD_VEL_TOPIC}" -v
 ros2 node list | grep -E "state_machine|mission_manager|graph_slam|mcl_localization" || true
+ros2 topic pub --once "${CMD_VEL_TOPIC}" geometry_msgs/msg/Twist '{}'
 ```
 
 ```text
@@ -279,16 +297,13 @@ do
 done
 ```
 
-Para `tb4_0` se puede correr el verificador existente como ayuda adicional,
-pero no reemplaza el chequeo por `ROBOT_NS` anterior.
+El verificador de Parte A debe ejecutarse con el mismo namespace elegido para
+la corrida.
 
 ```bash
 [Notebook laboratorio]
-if [ "${ROBOT_NAME}" = "tb4_0" ]; then
-  ros2 run tp_a_slam_aruco check_bag_contract "${BAG_DIR}"
-else
-  echo "check_bag_contract actual valida /tb4_0; usar solo el chequeo por ROBOT_NS."
-fi
+ros2 run tp_a_slam_aruco check_bag_contract "${BAG_DIR}" \
+  --robot-namespace "${ROBOT_NAME}"
 ```
 
 Reproducir una muestra corta antes de procesar.
@@ -326,6 +341,8 @@ Terminal 2:
 cd /ruta/al/checkout/TP-Final-Rob/tp_final_ws
 source install/setup.bash
 ros2 launch tp_a_slam_aruco parte_a_slam.launch.py \
+  robot_namespace:="${ROBOT_NAME}" \
+  artifact_dir:="${RUN_ROOT}" \
   odom_topic:="${ODOM_TOPIC}" \
   bag_tf_topic:="${TF_TOPIC}" \
   bag_tf_static_topic:="${TF_STATIC_TOPIC}" \
@@ -333,11 +350,6 @@ ros2 launch tp_a_slam_aruco parte_a_slam.launch.py \
   use_bag_tf:=true \
   use_sim_time:=true
 ```
-
-Limitacion del baseline: el launch actual de Parte A aun fija
-`image_topic` internamente para `tb4_0`. Para `tb4_1`, esta pasada requiere la
-rama futura de soporte de namespace o un override equivalente antes de declarar
-la corrida reproducible.
 
 Al terminar la reproduccion del bag, cortar el launch con `Ctrl+C` para que
 `graph_slam_node` escriba el JSON.
@@ -349,15 +361,18 @@ cp /tmp/aruco_detections.csv "${RUN_ROOT}/parte_a/aruco_detections.csv" 2>/dev/n
 cp /tmp/aruco_geometry_debug.csv "${RUN_ROOT}/parte_a/aruco_geometry_debug.csv" 2>/dev/null || true
 ```
 
-Gate A1/A2 antes de mapear:
+Checkpoints A1 y A2 antes de mapear:
 
 ```text
-[RViz]
-1. Revisar detecciones ArUco y debug image.
-2. Revisar que los landmarks queden en posiciones razonables.
-3. Revisar continuidad de trayectoria optimizada.
-4. Revisar que map->odom no pegue saltos instantaneos.
-5. Si los landmarks o la trayectoria son incoherentes, no generar mapa valido.
+[A1 - deteccion y geometria]
+APROBAR: IDs esperados, detecciones estables, reproyeccion aceptable y TF
+camara->base disponible o fallback documentado.
+RECHAZAR: IDs espurios persistentes, detecciones sin TF o geometria incoherente.
+
+[A2 - Graph SLAM]
+APROBAR: trajectory.json no vacio, landmarks razonables, trayectoria continua y
+map->odom sin saltos instantaneos.
+RECHAZAR: JSON ausente, landmarks divergentes o trayectoria discontinua.
 ```
 
 ## 9. Parte A, pasada 2: grilla de ocupacion
@@ -381,15 +396,13 @@ Terminal 2:
 cd /ruta/al/checkout/TP-Final-Rob/tp_final_ws
 source install/setup.bash
 ros2 launch tp_a_slam_aruco parte_a_mapa.launch.py \
+  robot_namespace:="${ROBOT_NAME}" \
+  artifact_dir:="${RUN_ROOT}" \
   trajectory_file:="${TRAJECTORY_FILE}" \
   odom_topic:="${ODOM_TOPIC}" \
+  scan_topic:="${SCAN_TOPIC}" \
   map_output:="${MAP_PREFIX}"
 ```
-
-Limitacion del baseline: el launch actual de mapeo aun fija `scan_topic` como
-`tb4_0/scan` y conserva extrinsecos LIDAR como fallback. Para `tb4_1`, no
-declarar este paso robusto hasta que la rama de LIDAR por TF y namespace soporte
-el topico seleccionado.
 
 Al terminar la reproduccion, cortar el launch con `Ctrl+C` para exportar mapa.
 
@@ -438,23 +451,51 @@ rviz2
 5. Rechazar el mapa si no es navegable para el TB4.
 ```
 
-Gate A3:
+Checkpoint A3:
 
 ```text
 [Accion fisica]
 1. No mover conos ni ArUco antes de aceptar el mapa.
 2. Confirmar que el laberinto real sigue igual que durante la adquisicion.
 3. Marcar el mapa y el JSON como pertenecientes al mismo RUN_ID.
+
+APROBAR: map.yaml/PGM cargan, paredes y aperturas coinciden con el escenario,
+no hay conexiones falsas y el JSON pertenece al mismo RUN_ID.
+RECHAZAR: paredes dobles severas, aperturas cerradas, mapa no navegable o
+artefactos mezclados entre corridas.
 ```
 
-## 11. Gates de Parte B real
+## 11. Parte B real
 
-Parte B real debe ejecutarse despues de aceptar mapa y landmarks. En el baseline
-actual, el perfil real final queda para una rama futura; este runbook define los
-gates que deberan cumplirse y evita usar el launch de simulacion sobre hardware
-real.
+Parte B real se ejecuta despues de aceptar mapa y landmarks. Antes de lanzar,
+dejar el robot detenido, probar la parada manual y mantener el e-stop accesible.
 
-Gate B1, localizacion sin movimiento autonomo:
+Terminal N1, parada disponible antes de cualquier goal:
+
+```bash
+[Notebook laboratorio]
+ros2 topic pub --once "${CMD_VEL_TOPIC}" geometry_msgs/msg/Twist '{}'
+ros2 topic info "${CMD_VEL_TOPIC}" -v
+```
+
+Terminal N2:
+
+```bash
+[Notebook laboratorio]
+cd /ruta/al/checkout/TP-Final-Rob/tp_final_ws
+source "${HOME}/miniforge3/etc/profile.d/conda.sh"
+conda activate rosenv_mf
+source install/setup.bash
+ros2 launch tp_b_navigation parte_b.launch.py \
+  profile:=real_tb4 \
+  robot_namespace:="${ROBOT_NAME}" \
+  artifact_dir:="${RUN_ROOT}" \
+  map_yaml:="${MAP_YAML}" \
+  landmark_map_file:="${TRAJECTORY_FILE}" \
+  enable_safety_gates:=true
+```
+
+Checkpoint B1, localizacion sin movimiento autonomo:
 
 ```text
 [RViz]
@@ -463,16 +504,23 @@ Gate B1, localizacion sin movimiento autonomo:
 3. Ver nube de particulas concentrada alrededor de la pose inicial.
 4. Confirmar correcciones al observar ArUco reales.
 5. Confirmar que no se publica velocidad durante este gate.
+6. Confirmar `/obstacle_monitor_healthy: true`.
+
+APROBAR: MCL fresco y concentrado, covarianza dentro de limites, scan/monitor
+frescos, TF map->base disponible y robot inmovil.
+RECHAZAR: pose vencida, covarianza alta, scan/monitor stale, TF ausente o
+cualquier velocidad inesperada.
 ```
 
 ```bash
 [Notebook laboratorio]
 ros2 topic echo /mcl_pose
 ros2 topic echo /particlecloud
+ros2 topic echo --once /obstacle_monitor_healthy std_msgs/msg/Bool
 ros2 topic info "${CMD_VEL_TOPIC}" -v
 ```
 
-Gate B2, navegacion basica:
+Checkpoint B2, navegacion basica:
 
 ```text
 [Accion fisica]
@@ -488,9 +536,14 @@ Gate B2, navegacion basica:
 2. Ver /plan antes de permitir movimiento.
 3. Ver seguimiento, orientacion final y error de llegada.
 4. Cancelar si la pose MCL se vuelve incoherente con scan y mapa.
+
+APROBAR: plan valido antes de mover, seguimiento con clearance y llegada dentro
+de tolerancia con orientacion final.
+RECHAZAR: cruce de paredes, movimiento sin plan, oscilacion insegura o perdida
+de localizacion/TF/scan/monitor.
 ```
 
-Gate B3, obstaculos dinamicos:
+Checkpoint B3, obstaculos dinamicos:
 
 ```text
 [Accion fisica]
@@ -498,9 +551,14 @@ Gate B3, obstaculos dinamicos:
 2. Probar primero deteccion con robot detenido.
 3. Probar replanning sin movimiento.
 4. Habilitar evasion a velocidad reducida solo al final.
+
+APROBAR: obstaculo no mapeado aparece en `/dynamic_obstacles`, dispara
+`/obstacle_detected` y produce evasion/replan sin colision.
+RECHAZAR: pared estatica tratada repetidamente como obstaculo nuevo, obstaculo
+ignorado o movimiento cuando el monitor deja de estar saludable.
 ```
 
-## 12. Gates de Parte C real
+## 12. Parte C real
 
 Parte C real usa el mismo mapa y landmarks aceptados. Los conos se agregan
 despues del mapeo; los ArUco y paredes no se mueven.
@@ -515,13 +573,21 @@ Preparar escenario:
 4. Evitar bloquear todas las rutas al objetivo.
 ```
 
-Gate C1, percepcion con robot detenido:
+Checkpoint C1, percepcion con robot detenido:
 
 ```bash
 [Notebook laboratorio]
 ros2 topic echo --once "${RGB_TOPIC}" sensor_msgs/msg/Image
 ros2 topic echo --once "${CAMERA_INFO_TOPIC}" sensor_msgs/msg/CameraInfo
 ros2 topic list | grep -i depth
+```
+
+Elegir el topico que entregue depth metrico alineado con el RGB y conservarlo:
+
+```bash
+[Notebook laboratorio]
+export DEPTH_TOPIC="${ROBOT_NS}/RUTA/DEPTH_ALINEADO"
+ros2 topic echo --once "${DEPTH_TOPIC}" sensor_msgs/msg/Image
 ```
 
 ```text
@@ -531,9 +597,36 @@ ros2 topic list | grep -i depth
 3. Confirmar TF camara -> map.
 4. Ver /red_cone/debug_image, /red_cone/mask y /red_cone_pose.
 5. No iniciar mision completa si depth alineado no esta validado.
+
+APROBAR: cono rojo estable produce pose en map; distractores no rojos no
+producen deteccion; depth, CameraInfo y TF son coherentes.
+RECHAZAR: depth no alineado/no metrico, pose fuera del piso/mapa, deteccion de
+distractores visuales o vision vencida.
 ```
 
-Gate C2, aproximacion:
+Antes de lanzar Parte C, cancelar cualquier mision anterior y publicar cero:
+
+```bash
+[Notebook laboratorio]
+ros2 service call /mission/cancel std_srvs/srv/Trigger '{}' || true
+ros2 topic pub --once "${CMD_VEL_TOPIC}" geometry_msgs/msg/Twist '{}'
+```
+
+Detener el launch de Parte B y arrancar Parte C en N2:
+
+```bash
+[Notebook laboratorio]
+ros2 launch tp_c_mission parte_c_real.launch.py \
+  profile:=real_tb4 \
+  robot_namespace:="${ROBOT_NAME}" \
+  artifact_dir:="${RUN_ROOT}" \
+  map_yaml:="${MAP_YAML}" \
+  landmark_map_file:="${TRAJECTORY_FILE}" \
+  depth_topic:="${DEPTH_TOPIC}" \
+  enable_safety_gates:=true
+```
+
+Checkpoint C2, aproximacion:
 
 ```text
 [RViz]
@@ -541,9 +634,13 @@ Gate C2, aproximacion:
 2. Confirmar pose de aproximacion libre en la grilla.
 3. Confirmar camino A* alcanzable.
 4. Confirmar distancia final segura.
+
+APROBAR: pose de aproximacion libre, A* alcanzable y standoff seguro.
+RECHAZAR: objetivo dentro de pared/capa dinamica, plan ausente o visibilidad de
+camara usada como sustituto de la grilla.
 ```
 
-Gate C3, mision completa:
+Checkpoint C3, mision completa:
 
 ```bash
 [Notebook laboratorio]
@@ -557,6 +654,12 @@ ros2 topic echo /mission/status
 2. Cancelar si se pierde localizacion, scan, vision o TF.
 3. Confirmar que distractores no rojos se ignoran.
 4. Confirmar que la mision publica FOUND solo para el cono rojo.
+
+APROBAR: exploracion progresa, el cono rojo confirmado termina en FOUND, los
+distractores no rojos se ignoran visualmente y los objetos fisicos siguen
+siendo tratados por LIDAR.
+RECHAZAR: movimiento con MCL/vision/scan/monitor/TF vencido, colision, cruce de
+pared o FOUND para un distractor.
 ```
 
 Cancelacion normal:
@@ -586,7 +689,23 @@ ros2 topic echo --once "${CMD_VEL_TOPIC}" geometry_msgs/msg/Twist
 4. No desmontar el escenario antes de copiar artefactos criticos.
 ```
 
-## 14. Retencion de artefactos
+## 14. Troubleshooting
+
+| Sintoma | Comprobacion y accion |
+|---|---|
+| No hay discovery | Igualar `ROS_DOMAIN_ID` y `RMW_IMPLEMENTATION`; comprobar red, reiniciar `ros2 daemon`, volver a listar nodos. |
+| Topicos del TB4 incorrecto | Revisar `ROBOT_NAME`, `ROBOT_NS` y `platform-resolved.yaml`; no usar overrides de otro namespace. |
+| Falta TF | Inspeccionar frame de scan/camara y `ros2 run tf2_ros tf2_echo`; no inventar frames con el namespace. |
+| Depth no sirve | Confirmar encoding, escala metrica, alineacion con RGB y timestamps; repetir C1. |
+| MCL no converge | Revisar `/initialpose`, mapa/landmarks del mismo RUN_ID, observaciones ArUco y covarianza. |
+| `scan_stale` | Verificar frecuencia, reloj real (`use_sim_time:=false`) y namespace del scan. |
+| Monitor stale/unhealthy | Revisar `/obstacle_monitor_healthy`, `/map`, MCL, scan y TF del sensor; no continuar hasta `true`. |
+| Plan fallido | Verificar goal libre, mapa aceptado y capa `/dynamic_obstacles`; cancelar y elegir objetivo seguro. |
+| Vision stale | Revisar RGB, CameraInfo, depth y TF; `mission_manager` debe cancelar y publicar `FAILED`. |
+
+No desactivar safety gates para hacer desaparecer un diagnostico.
+
+## 15. Retencion de artefactos
 
 Antes de cerrar la sesion, conservar como minimo:
 
@@ -595,11 +714,13 @@ Antes de cerrar la sesion, conservar como minimo:
 - `config/bag-info.txt`.
 - `config/bag-topics.txt`.
 - `parte_a/trajectory.json`.
+- landmarks optimizados incluidos en `parte_a/trajectory.json`.
 - `parte_a/map.yaml`.
 - `parte_a/map.pgm`.
 - diagnosticos ArUco y geometria si existen.
 - capturas o notas de RViz para gates A, B y C.
 - logs de comandos relevantes.
+- resultado aprobado/rechazado de A1-A3, B1-B3 y C1-C3.
 
 Crear un resumen textual de la corrida.
 
@@ -624,7 +745,7 @@ EOF
 find "${RUN_ROOT}" -maxdepth 3 -type f | sort > "${RUN_ROOT}/artifact-manifest.txt"
 ```
 
-## 15. Referencia separada: simulacion
+## 16. Referencia separada: simulacion
 
 La simulacion no forma parte del camino real de laboratorio de este runbook.
 Usarla solamente para regresion de desarrollo o practica, siguiendo las guias

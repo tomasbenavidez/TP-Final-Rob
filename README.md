@@ -1,5 +1,10 @@
 # TP Final de Robótica Autónoma
 
+El procedimiento ejecutable para el dia de laboratorio esta en el
+**[runbook final de TurtleBot4](docs/2026-06-30-tb4-laboratory-runbook.md)**.
+Incluye terminales, seguridad, adquisicion, etapas A/B/C, criterios de
+aceptacion, troubleshooting y artefactos para `tb4_0` y `tb4_1`.
+
 Implementación ROS 2 del flujo completo del trabajo final:
 
 1. **Parte A — SLAM y mapeo:** procesa un rosbag real del TurtleBot4, estima la trayectoria con Graph SLAM y ArUco, y genera una grilla de ocupación.
@@ -21,6 +26,7 @@ TP-Final-Rob/
 │   └── src/
 │       ├── tp_a_slam_aruco/       # Parte A
 │       ├── tp_interfaces/         # mensajes ROS compartidos
+│       ├── tp_platform/           # perfiles y tópicos compartidos TB3/TB4
 │       ├── tp_b_navigation/       # Parte B
 │       ├── tp_c_mission/          # Parte C
 │       └── turtlebot3_custom_simulation/
@@ -45,7 +51,7 @@ Todos los comandos siguientes parten de la raíz del repositorio clonado:
 
 ```bash
 cd tp_final_ws
-colcon build --packages-select tp_interfaces tp_a_slam_aruco \
+colcon build --packages-select tp_platform tp_interfaces tp_a_slam_aruco \
   tp_b_navigation tp_c_mission turtlebot3_custom_simulation
 source install/setup.bash        # bash
 # source install/setup.zsh       # zsh
@@ -71,6 +77,7 @@ Terminal 2:
 ```bash
 source install/setup.bash
 ros2 launch tp_a_slam_aruco parte_a_slam.launch.py \
+  robot_namespace:=tb4_0 \
   calibration_file:="$(pwd)/src/tp_a_slam_aruco/config/camera_tb4_0.yaml" \
   trajectory_file:=/tmp/trayectoria.json \
   use_bag_tf:=true
@@ -82,6 +89,9 @@ Salidas principales: `/aruco_detections`, `/aruco_base_debug`, `/belief`,
 `/poses_guardadas`, `/trajectory_optimized`, `/landmarks` y TF `map → odom`.
 Los diagnósticos de detección y geometría se guardan por defecto en
 `/tmp/aruco_detections.csv` y `/tmp/aruco_geometry_debug.csv`.
+Para usar el otro robot del laboratorio, cambiar el argumento a
+`robot_namespace:=tb4_1`; los tópicos de odometría, cámara y TF se derivan de
+esa selección salvo que se pasen overrides explícitos.
 
 ### Segunda pasada: grilla de ocupación
 
@@ -97,6 +107,7 @@ Terminal 2:
 ```bash
 source install/setup.bash
 ros2 launch tp_a_slam_aruco parte_a_mapa.launch.py \
+  robot_namespace:=tb4_0 \
   trajectory_file:=/tmp/trayectoria.json \
   map_output:=/tmp/mapa
 ```
@@ -172,6 +183,21 @@ Nodos de Parte B:
 - `obstacle_monitor`
 - `state_machine`
 
+Perfil real TB4, usando mapa y landmarks de Parte A:
+
+```bash
+source tp_final_ws/install/setup.bash
+ros2 launch tp_b_navigation parte_b.launch.py \
+  profile:=real_tb4 \
+  robot_namespace:=tb4_0 \
+  map_yaml:=/tmp/mapa.yaml \
+  landmark_map_file:=/tmp/trayectoria.json
+```
+
+En `real_tb4`, Parte B agrega `aruco_detector` y `aruco_mcl_adapter`, no levanta
+`landmark_publisher` ni `landmark_sensor`, y activa gates de seguridad por pose
+MCL, covarianza, TF y scan stale antes de mover o insertar obstáculos dinámicos.
+
 La guía detallada, incluido el setup alternativo para RoboStack/macOS, está en [`docs/parte_b/02_guia_ejecucion.md`](docs/parte_b/02_guia_ejecucion.md).
 
 ## Parte C — explorar y buscar el cono rojo
@@ -195,6 +221,7 @@ Para calibrar percepción con el rosbag de visión:
 ```bash
 ros2 bag play /ruta/al/bag_vision --clock
 ros2 launch tp_c_mission parte_c_bag.launch.py \
+  robot_namespace:=tb4_0 \
   depth_topic:=/topico/depth_alineado
 ```
 
@@ -202,10 +229,17 @@ El despliegue real requiere el mapa y el JSON de trayectoria/landmarks de Parte 
 
 ```bash
 ros2 launch tp_c_mission parte_c_real.launch.py \
+  robot_namespace:=tb4_0 \
   map_yaml:=/tmp/mapa.yaml \
   landmark_map_file:=/tmp/trayectoria.json \
-  depth_topic:=/topico/depth_alineado
+  depth_topic:=/topico/depth_alineado \
+  enable_safety_gates:=true
 ```
+
+En el perfil real, `/mission/start` exige mapa, pose MCL fresca y visión lista.
+Si durante la misión se vence MCL, sube la covarianza o se pierde visión/TF de
+cámara, `mission_manager` publica cancelación y deja `/mission/status` en
+`FAILED`.
 
 La arquitectura, los parámetros y las condiciones de aceptación están en
 [`docs/parte_c/README.md`](docs/parte_c/README.md).
@@ -233,5 +267,6 @@ RUN_ROS_SMOKE=1 python3 -m pytest tp_final_ws/src/tp_a_slam_aruco/test/test_ros_
 - `/landmarks` tiene contratos distintos: ArUco optimizados en Parte A y landmarks virtuales conocidos en Parte B.
 - `state_machine` es el único nodo de Parte B autorizado a publicar `/cmd_vel`.
 - En Parte C, MCL consume observaciones ArUco identificadas y sigue siendo el único productor de `map → odom`.
+- `tp_c_mission` no publica `/cmd_vel`; sólo envía `/mission_goal` y cancelaciones a `state_machine`.
 - Los obstáculos dinámicos conservan evasión reactiva; no se incorporan al A* estático.
 - Para usar un mapa alternativo: `ros2 launch tp_b_navigation parte_b.launch.py map_yaml:=/ruta/map.yaml`.
