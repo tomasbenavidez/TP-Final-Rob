@@ -40,6 +40,7 @@ import os
 import numpy as np
 import rclpy
 import rclpy.time
+from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
 from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy
 from sensor_msgs.msg import LaserScan
@@ -52,6 +53,7 @@ from tp_a_slam_aruco.scan_projection import (
     iter_valid_scan_points,
     sensor_pose_in_map,
 )
+from tp_a_slam_aruco.scan_odom_buffer import ScanOdomBuffer
 from tp_a_slam_aruco.slam_geometry import (
     se2_compose,
     se2_interpolate,
@@ -103,6 +105,9 @@ class OccupancyGridNode(Node):
         # angular es la menos confiable y un barrido de 360deg se distorsiona.
         # rad/s; <=0 desactiva el gate. Se mide sobre la odometria densa.
         self.declare_parameter('max_angular_velocity', 0.0)
+        self.declare_parameter('max_odom_buffer_samples', 4000)
+        self.declare_parameter('max_pending_scans', 500)
+        self.declare_parameter('max_scan_wait_seconds', 1.0)
 
         self.resolution    = self.get_parameter('resolution').value
         self.map_output    = self.get_parameter('map_output').value
@@ -163,9 +168,14 @@ class OccupancyGridNode(Node):
                 'interpolacion lineal de keyframes (modo legacy, menos preciso). '
                 'Re-generar el JSON con la 1ª pasada actualizada para mejor mapa.')
 
-        # Buffer de odometria densa (ordenado por timestamp).
-        self.odom_t = []
-        self.odom_pose = []
+        self.scan_odom_buffer = ScanOdomBuffer(
+            max_odom_samples=int(
+                self.get_parameter('max_odom_buffer_samples').value),
+            max_pending_scans=int(
+                self.get_parameter('max_pending_scans').value),
+            max_wait_seconds=float(
+                self.get_parameter('max_scan_wait_seconds').value),
+        )
 
         # Dimensiones de la grilla: auto-calculadas desde la trayectoria si está disponible,
         # usando los parámetros explícitos como fallback.
@@ -255,25 +265,9 @@ class OccupancyGridNode(Node):
         yaw = yaw_from_quaternion(p.orientation.x, p.orientation.y,
                                   p.orientation.z, p.orientation.w)
         t = msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9
-        # El bag llega en orden; si no, ignoramos la muestra fuera de orden.
-        if self.odom_t and t < self.odom_t[-1]:
-            return
-        self.odom_t.append(t)
-        self.odom_pose.append((p.position.x, p.position.y, yaw))
-
-    def _odom_pose_at(self, t):
-        """Interpola la odometria densa en el timestamp t. None si no hay datos suficientes."""
-        if len(self.odom_t) < 2:
-            return None
-        if t <= self.odom_t[0]:
-            return self.odom_pose[0]
-        if t >= self.odom_t[-1]:
-            return self.odom_pose[-1]
-        hi = bisect.bisect_right(self.odom_t, t)
-        lo = hi - 1
-        t0, t1 = self.odom_t[lo], self.odom_t[hi]
-        alpha = (t - t0) / (t1 - t0) if t1 != t0 else 0.0
-        return se2_interpolate(self.odom_pose[lo], self.odom_pose[hi], alpha)
+        odom_pose = (p.position.x, p.position.y, yaw)
+        self.scan_odom_buffer.add_odom(t, odom_pose)
+        self._drain_ready_scans()
 
     def _correction_at(self, t):
         """Interpola la correccion SLAM (map<-odom) en el timestamp t."""
@@ -289,18 +283,20 @@ class OccupancyGridNode(Node):
 
     def _angular_velocity_at(self, t):
         """Velocidad angular (rad/s) de la odometria densa cerca de t. 0 si no hay datos."""
-        if len(self.odom_t) < 2:
+        samples = self.scan_odom_buffer.odom_samples
+        if len(samples) < 2:
             return 0.0
-        hi = bisect.bisect_right(self.odom_t, t)
-        hi = min(max(hi, 1), len(self.odom_t) - 1)
+        stamps = [sample[0] for sample in samples]
+        hi = bisect.bisect_right(stamps, t)
+        hi = min(max(hi, 1), len(samples) - 1)
         lo = hi - 1
-        dt = self.odom_t[hi] - self.odom_t[lo]
+        dt = samples[hi][0] - samples[lo][0]
         if dt <= 0:
             return 0.0
-        dth = normalize_angle(self.odom_pose[hi][2] - self.odom_pose[lo][2])
+        dth = normalize_angle(samples[hi][1][2] - samples[lo][1][2])
         return dth / dt
 
-    def _resolve_pose(self, t):
+    def _resolve_pose(self, t, odom_pose):
         """Mejor pose disponible para el scan en t.
 
         Modo preferido (use_dense_odom): odometria densa corregida por la
@@ -308,10 +304,7 @@ class OccupancyGridNode(Node):
         Fallback legacy: interpolacion lineal de los keyframes sparse.
         """
         if self.use_dense_odom:
-            odom = self._odom_pose_at(t)
-            if odom is None:
-                return None
-            return se2_compose(self._correction_at(t), odom)
+            return se2_compose(self._correction_at(t), odom_pose)
         return self._interpolate_pose(t)
 
     @staticmethod
@@ -396,16 +389,33 @@ class OccupancyGridNode(Node):
         if not self.trajectory:
             return
         t = msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9
+        self.scan_odom_buffer.add_scan(msg, t)
+        self._drain_ready_scans()
 
+    def _drain_ready_scans(self):
+        for ready in self.scan_odom_buffer.pop_ready():
+            self._integrate_ready_scan(
+                ready.scan,
+                ready.stamp,
+                ready.odom_pose,
+                ready.interpolation_gap_ms,
+            )
+
+    def _integrate_ready_scan(
+        self,
+        msg,
+        t,
+        odom_pose,
+        interpolation_gap_ms,
+    ):
         # Gate de rotacion: no integrar mientras el robot gira rapido.
         if self.max_angular_velocity > 0.0:
             if abs(self._angular_velocity_at(t)) > self.max_angular_velocity:
                 self.scans_skipped_turning += 1
                 return
 
-        pose = self._resolve_pose(t)
+        pose = self._resolve_pose(t, odom_pose)
         if pose is None:
-            # Odometria densa todavia no disponible para este scan; se descarta.
             self.scans_skipped_no_pose += 1
             return
         sensor_pose, source = self._sensor_pose_for_scan(pose, msg)
@@ -420,8 +430,23 @@ class OccupancyGridNode(Node):
                 f'girando={self.scans_skipped_turning}, '
                 f'sin_lidar_tf={self.scans_skipped_no_lidar_tf}; '
                 f'fuente_lidar={source}, tf={self.scans_integrated_with_tf}, '
-                f'fallback={self.scans_integrated_with_fallback})')
+                f'fallback={self.scans_integrated_with_fallback}; '
+                f'esperando_odom={self.scan_odom_buffer.waiting_count}, '
+                f'gap_odom_ms={interpolation_gap_ms:.1f})')
             self.publish_map()
+
+    def finalize_scan_buffer(self):
+        dropped = self.scan_odom_buffer.finalize()
+        self.get_logger().info(
+            f'Sincronizacion scan/odom: integrados_con_bracket='
+            f'{self.scan_odom_buffer.integrated_count}, '
+            f'esperando={self.scan_odom_buffer.waiting_count}, '
+            f'descartados_fin={self.scan_odom_buffer.dropped_at_end}, '
+            f'descartados_espera='
+            f'{self.scan_odom_buffer.dropped_excessive_wait}, '
+            f'gap_max_ms='
+            f'{self.scan_odom_buffer.max_interpolation_gap_ms:.1f}.')
+        return dropped
 
     # ------------------------------------------------------------------ #
     #  Publicación y exportación del mapa                                  #
@@ -495,17 +520,21 @@ def main(args=None):
     node = OccupancyGridNode()
     try:
         rclpy.spin(node)
-    except KeyboardInterrupt:
+    except (KeyboardInterrupt, ExternalShutdownException):
         pass
     finally:
+        node.finalize_scan_buffer()
         if node.map_output:
             node.export_map(node.map_output)
-        try:
-            node.publish_map()
-        except Exception as exc:
-            node.get_logger().warn(f'No se pudo publicar el mapa final durante shutdown: {exc}')
+        if rclpy.ok():
+            try:
+                node.publish_map()
+            except Exception as exc:
+                node.get_logger().warn(
+                    f'No se pudo publicar el mapa final durante shutdown: {exc}')
         node.destroy_node()
-        rclpy.shutdown()
+        if rclpy.ok():
+            rclpy.try_shutdown()
 
 
 if __name__ == '__main__':

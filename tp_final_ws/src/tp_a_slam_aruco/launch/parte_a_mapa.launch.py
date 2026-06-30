@@ -88,6 +88,9 @@ def _launch_nodes(context):
             'lidar_fallback_enabled': ParameterValue(
                 LaunchConfiguration('lidar_fallback_enabled'), value_type=bool),
             'max_angular_velocity': LaunchConfiguration('max_angular_velocity'),
+            'max_odom_buffer_samples': LaunchConfiguration('max_odom_buffer_samples'),
+            'max_pending_scans': LaunchConfiguration('max_pending_scans'),
+            'max_scan_wait_seconds': LaunchConfiguration('max_scan_wait_seconds'),
         }],
     )
 
@@ -156,5 +159,8 @@ def generate_launch_description():
         ),
         DeclareLaunchArgument('resolution', default_value='0.05'),
         DeclareLaunchArgument('max_angular_velocity', default_value='0.0'),
+        DeclareLaunchArgument('max_odom_buffer_samples', default_value='4000'),
+        DeclareLaunchArgument('max_pending_scans', default_value='500'),
+        DeclareLaunchArgument('max_scan_wait_seconds', default_value='1.0'),
         OpaqueFunction(function=_launch_nodes),
     ])

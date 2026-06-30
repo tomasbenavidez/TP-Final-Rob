@@ -53,6 +53,30 @@ def test_occupancy_grid_reports_lidar_tf_and_fallback_sources():
     assert 'scans_skipped_no_lidar_tf' in text
 
 
+def test_occupancy_grid_queues_scans_until_dense_odom_brackets_them():
+    node_path = (
+        Path(__file__).resolve().parents[1] / 'tp_a_slam_aruco'
+        / 'occupancy_grid_node.py')
+    text = node_path.read_text()
+
+    assert 'ScanOdomBuffer' in text
+    assert 'self.scan_odom_buffer.add_scan(msg, t)' in text
+    assert 'self.scan_odom_buffer.add_odom(t, odom_pose)' in text
+    assert 'for ready in self.scan_odom_buffer.pop_ready()' in text
+    assert 'self.scan_odom_buffer.finalize()' in text
+
+    launch = (
+        Path(__file__).resolve().parents[1] / 'launch'
+        / 'parte_a_mapa.launch.py').read_text()
+    for argument in (
+        'max_odom_buffer_samples',
+        'max_pending_scans',
+        'max_scan_wait_seconds',
+    ):
+        assert f"DeclareLaunchArgument('{argument}'" in launch
+        assert f"'{argument}': LaunchConfiguration('{argument}')" in launch
+
+
 def test_readme_documents_two_pass_outputs_and_raw_detection_topic():
     readme_path = Path(__file__).resolve().parents[4] / 'README.md'
     text = readme_path.read_text()
@@ -107,3 +131,14 @@ def test_part_a_nodes_handle_ros_launch_external_shutdown():
         text = (package / filename).read_text()
         assert 'ExternalShutdownException' in text, filename
         assert 'except (KeyboardInterrupt, ExternalShutdownException):' in text, filename
+
+
+def test_occupancy_grid_flushes_buffer_on_external_shutdown():
+    source = (
+        Path(__file__).resolve().parents[1] / 'tp_a_slam_aruco'
+        / 'occupancy_grid_node.py').read_text()
+
+    assert 'ExternalShutdownException' in source
+    assert 'except (KeyboardInterrupt, ExternalShutdownException):' in source
+    assert 'node.finalize_scan_buffer()' in source
+    assert 'if rclpy.ok():' in source
