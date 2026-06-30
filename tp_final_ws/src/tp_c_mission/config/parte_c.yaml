@@ -13,6 +13,10 @@ red_cone_detector:
     min_depth_m: 0.20
     max_depth_m: 5.0
     max_depth_age: 0.20
+    max_scan_age: 0.30
+    lidar_bearing_window_rad: 0.08
+    min_lidar_points: 1
+    range_source: monocular
     require_aligned_depth: false
     allow_latest_tf_fallback: false
     # Validación geométrica 3D (filtrado de distractores, p. ej. la cara roja del HospitalBot):

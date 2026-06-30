@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
-"""Detector ROS de conos rojos con depth y fallback monocular."""
+"""Detector ROS de conos rojos con depth, LIDAR o fallback monocular."""
 
+import math
 import numpy as np
 import rclpy
 from cv_bridge import CvBridge
@@ -8,12 +9,17 @@ from geometry_msgs.msg import PoseWithCovarianceStamped
 from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
-from sensor_msgs.msg import CameraInfo, Image
+from sensor_msgs.msg import CameraInfo, Image, LaserScan
 from std_msgs.msg import Bool
 from tf2_ros import Buffer, TransformListener
 
 from tp_c_mission.cone_perception import (
-    ConeTracker, detect_red_regions, estimate_range, pixel_to_camera,
+    ConeTracker,
+    detect_red_regions,
+    estimate_range,
+    pixel_bearing_rad,
+    pixel_to_camera,
+    select_lidar_range,
 )
 
 
@@ -27,6 +33,8 @@ def evaluate_vision_readiness(
     rgb_stamp,
     depth_stamp,
     max_depth_age,
+    range_source,
+    scan_fresh,
     tf_available,
     require_aligned_depth,
 ):
@@ -36,7 +44,9 @@ def evaluate_vision_readiness(
         return 'camera_info_invalid'
     if camera_info_shape != rgb_shape:
         return 'camera_info_misaligned'
-    if require_aligned_depth:
+    if range_source == 'lidar' and not scan_fresh:
+        return 'scan_stale'
+    if require_aligned_depth or range_source == 'depth':
         if depth_shape is None or depth_stamp is None:
             return 'depth_missing'
         if depth_shape != rgb_shape:
@@ -55,7 +65,9 @@ class ConeDetector(Node):
             'rgb_topic': '/camera/rgb/image_raw',
             'depth_topic': '/camera/depth/image_raw',
             'camera_info_topic': '/camera/rgb/camera_info',
+            'scan_topic': '/scan',
             'global_frame': 'map',
+            'range_source': 'depth',
             'cone_height_m': 0.30,
             'min_area_px': 150,
             'required_hits': 3,
@@ -65,6 +77,9 @@ class ConeDetector(Node):
             'max_depth_m': 5.0,
             'depth_scale': 0.001,
             'max_depth_age': 0.20,
+            'max_scan_age': 0.30,
+            'lidar_bearing_window_rad': 0.08,
+            'min_lidar_points': 1,
             'require_aligned_depth': False,
             'allow_latest_tf_fallback': False,
             'hue_low': 10, 'hue_high': 170,
@@ -88,6 +103,12 @@ class ConeDetector(Node):
         self.max_depth = float(get('max_depth_m'))
         self.depth_scale = float(get('depth_scale'))
         self.max_depth_age = float(get('max_depth_age'))
+        self.max_scan_age = float(get('max_scan_age'))
+        self.lidar_bearing_window = float(get('lidar_bearing_window_rad'))
+        self.min_lidar_points = int(get('min_lidar_points'))
+        self.range_source = str(get('range_source')).lower()
+        if self.range_source not in ('depth', 'lidar', 'monocular'):
+            raise ValueError('range_source debe ser depth, lidar o monocular')
         self.require_aligned_depth = bool(get('require_aligned_depth'))
         self.allow_latest_tf_fallback = bool(get('allow_latest_tf_fallback'))
         self.hsv = (
@@ -106,12 +127,18 @@ class ConeDetector(Node):
         self.bridge = CvBridge()
         self.depth = None
         self.depth_stamp = None
+        self.last_scan = None
+        self.last_scan_stamp = None
         self.camera_info = None
         self.tf_buffer = Buffer()
         self.tf_listener = TransformListener(self.tf_buffer, self)
 
-        self.create_subscription(Image, str(get('depth_topic')), self.depth_cb,
-                                 qos_profile_sensor_data)
+        if self.range_source == 'depth':
+            self.create_subscription(Image, str(get('depth_topic')), self.depth_cb,
+                                     qos_profile_sensor_data)
+        if self.range_source == 'lidar':
+            self.create_subscription(LaserScan, str(get('scan_topic')), self.scan_cb,
+                                     qos_profile_sensor_data)
         self.create_subscription(CameraInfo, str(get('camera_info_topic')), self.info_cb,
                                  qos_profile_sensor_data)
         self.create_subscription(Image, str(get('rgb_topic')), self.rgb_cb,
@@ -123,6 +150,10 @@ class ConeDetector(Node):
         self.mask_pub = self.create_publisher(Image, '/red_cone/mask',
                                               qos_profile_sensor_data)
         self.ready_pub = self.create_publisher(Bool, '/red_cone/vision_ready', 10)
+
+    def scan_cb(self, msg):
+        self.last_scan = msg
+        self.last_scan_stamp = _stamp_seconds(msg.header.stamp)
 
     def depth_cb(self, msg):
         depth = np.asarray(self.bridge.imgmsg_to_cv2(msg, desired_encoding='passthrough'))
@@ -154,9 +185,30 @@ class ConeDetector(Node):
                 msg.header.frame_id,
                 rclpy.time.Time(),
             )
+        if self.range_source == 'lidar' and self.last_scan is not None:
+            scan_time = rclpy.time.Time.from_msg(self.last_scan.header.stamp)
+            scan_frame = self.last_scan.header.frame_id
+            tf_available = (
+                tf_available
+                and self.tf_buffer.can_transform(
+                    scan_frame,
+                    msg.header.frame_id,
+                    measurement_time,
+                )
+                and self.tf_buffer.can_transform(
+                    self.global_frame,
+                    scan_frame,
+                    scan_time,
+                )
+            )
         camera_info_shape = (
             None if self.camera_info is None
             else (self.camera_info.height, self.camera_info.width)
+        )
+        rgb_stamp = _stamp_seconds(msg.header.stamp)
+        scan_fresh = (
+            self.last_scan_stamp is not None
+            and abs(rgb_stamp - self.last_scan_stamp) <= self.max_scan_age
         )
         ready_reason = evaluate_vision_readiness(
             rgb_fresh=True,
@@ -164,9 +216,11 @@ class ConeDetector(Node):
             rgb_shape=image.shape[:2],
             camera_info_shape=camera_info_shape,
             depth_shape=None if self.depth is None else self.depth.shape,
-            rgb_stamp=_stamp_seconds(msg.header.stamp),
+            rgb_stamp=rgb_stamp,
             depth_stamp=self.depth_stamp,
             max_depth_age=self.max_depth_age,
+            range_source=self.range_source,
+            scan_fresh=scan_fresh,
             tf_available=tf_available,
             require_aligned_depth=self.require_aligned_depth,
         )
@@ -190,11 +244,13 @@ class ConeDetector(Node):
             confirmed is None
             or region is None
             or self.camera_info is None
-            or (self.require_aligned_depth and ready_reason is not None)
+            or (
+                (self.require_aligned_depth or self.range_source == 'lidar')
+                and ready_reason is not None
+            )
         ):
             return
         depth_values = np.array([], dtype=float)
-        rgb_stamp = _stamp_seconds(msg.header.stamp)
         depth_fresh = (
             self.depth_stamp is not None
             and abs(rgb_stamp - self.depth_stamp) <= self.max_depth_age)
@@ -203,12 +259,39 @@ class ConeDetector(Node):
             cols = np.fromiter((item[1] for item in region.pixels), dtype=int)
             depth_values = self.depth[rows, cols]
         k = self.camera_info.k
-        distance, source = estimate_range(
-            depth_values, region.height, k[4], self.cone_height,
-            self.min_depth, self.max_depth,
-        )
-        if distance is None:
-            return
+        if self.range_source == 'lidar':
+            map_point = self._map_point_from_lidar(
+                confirmed,
+                k,
+                msg.header.frame_id,
+                measurement_time,
+            )
+            source = 'lidar'
+            if map_point is None:
+                return
+        else:
+            distance, source = estimate_range(
+                depth_values, region.height, k[4], self.cone_height,
+                self.min_depth, self.max_depth,
+            )
+            if self.range_source == 'depth' and source != 'depth':
+                return
+            if self.range_source == 'monocular' and source == 'depth':
+                source = 'monocular'
+            if distance is None:
+                return
+            camera_point = pixel_to_camera(
+                confirmed[0], confirmed[1], distance, k[0], k[4], k[2], k[5])
+            try:
+                transform = self._lookup_transform(
+                    msg.header.frame_id,
+                    measurement_time,
+                )
+            except Exception as exc:  # noqa: BLE001
+                self.get_logger().warn(f'Sin TF cámara→{self.global_frame}: {exc}',
+                                       throttle_duration_sec=2.0)
+                return
+            map_point = _transform_point(camera_point, transform)
         # --- Validación geométrica 3D: descartar distractores rojos (consigna 1.2) ---
         # El rojo del HospitalBot es indistinguible por color/forma, pero su geometría no.
         # (1) Altura real implícita ~ altura del cono (sólo confiable con depth real).
@@ -220,18 +303,6 @@ class ConeDetector(Node):
                     f'(cono {self.cone_height:.2f}±{self.cone_height_tol:.2f}).',
                     throttle_duration_sec=2.0)
                 return
-        camera_point = pixel_to_camera(
-            confirmed[0], confirmed[1], distance, k[0], k[4], k[2], k[5])
-        try:
-            transform = self._lookup_transform(
-                msg.header.frame_id,
-                measurement_time,
-            )
-        except Exception as exc:  # noqa: BLE001
-            self.get_logger().warn(f'Sin TF cámara→{self.global_frame}: {exc}',
-                                   throttle_duration_sec=2.0)
-            return
-        map_point = _transform_point(camera_point, transform)
         # (2) Base apoyada en el piso (z≈0 en 'map'): el cono se para en el suelo,
         #     la cara roja del HospitalBot está elevada. Usa el tercio inferior de la región.
         if source == 'depth':
@@ -263,6 +334,70 @@ class ConeDetector(Node):
         output.pose.covariance[7] = sigma ** 2
         output.pose.covariance[14] = (2.0 * sigma) ** 2
         self.pose_pub.publish(output)
+
+    def _map_point_from_lidar(self, confirmed, camera_k, camera_frame, measurement_time):
+        if self.last_scan is None:
+            return None
+        camera_bearing = pixel_bearing_rad(confirmed[0], camera_k[0], camera_k[2])
+        if camera_bearing is None:
+            return None
+        ray_camera = (
+            math.sin(camera_bearing),
+            0.0,
+            math.cos(camera_bearing),
+        )
+        scan = self.last_scan
+        scan_frame = scan.header.frame_id
+        try:
+            camera_to_scan = self.tf_buffer.lookup_transform(
+                scan_frame,
+                camera_frame,
+                measurement_time,
+            )
+            scan_to_map = self.tf_buffer.lookup_transform(
+                self.global_frame,
+                scan_frame,
+                rclpy.time.Time.from_msg(scan.header.stamp),
+            )
+        except Exception as exc:  # noqa: BLE001
+            if not self.allow_latest_tf_fallback:
+                self.get_logger().warn(
+                    f'Sin TF cámara/LIDAR→{self.global_frame}: {exc}',
+                    throttle_duration_sec=2.0)
+                return None
+            camera_to_scan = self.tf_buffer.lookup_transform(
+                scan_frame,
+                camera_frame,
+                rclpy.time.Time(),
+            )
+            scan_to_map = self.tf_buffer.lookup_transform(
+                self.global_frame,
+                scan_frame,
+                rclpy.time.Time(),
+            )
+        origin_scan = _transform_point((0.0, 0.0, 0.0), camera_to_scan)
+        ray_scan = _transform_point(ray_camera, camera_to_scan)
+        dx = ray_scan[0] - origin_scan[0]
+        dy = ray_scan[1] - origin_scan[1]
+        target_bearing = math.atan2(dy, dx)
+        distance = select_lidar_range(
+            scan.ranges,
+            angle_min=scan.angle_min,
+            angle_increment=scan.angle_increment,
+            target_bearing=target_bearing,
+            window_rad=self.lidar_bearing_window,
+            range_min=max(scan.range_min, self.min_depth),
+            range_max=min(scan.range_max, self.max_depth),
+            min_points=self.min_lidar_points,
+        )
+        if distance is None:
+            return None
+        scan_point = (
+            distance * math.cos(target_bearing),
+            distance * math.sin(target_bearing),
+            0.0,
+        )
+        return _transform_point(scan_point, scan_to_map)
 
     def _lookup_transform(self, source_frame, measurement_time):
         try:

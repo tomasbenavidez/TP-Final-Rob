@@ -12,6 +12,8 @@ from tp_c_mission.cone_perception import (  # noqa: E402
     ConeTracker,
     detect_red_regions,
     estimate_range,
+    pixel_bearing_rad,
+    select_lidar_range,
 )
 
 
@@ -58,6 +60,49 @@ class ConePerceptionTest(unittest.TestCase):
         self.assertEqual(source, 'depth')
         self.assertAlmostEqual(fallback, 2.4)
         self.assertEqual(fallback_source, 'monocular')
+
+    def test_pixel_bearing_uses_camera_intrinsics(self):
+        self.assertAlmostEqual(pixel_bearing_rad(center_u=125, fx=250, cx=125), 0.0)
+        self.assertGreater(pixel_bearing_rad(center_u=175, fx=250, cx=125), 0.0)
+        self.assertLess(pixel_bearing_rad(center_u=75, fx=250, cx=125), 0.0)
+
+    def test_lidar_range_uses_median_of_valid_beams_near_bearing(self):
+        ranges = [float('inf'), 1.0, 1.2, 5.0, float('nan')]
+
+        value = select_lidar_range(
+            ranges,
+            angle_min=-0.2,
+            angle_increment=0.1,
+            target_bearing=0.0,
+            window_rad=0.11,
+            range_min=0.2,
+            range_max=4.0,
+            min_points=2,
+        )
+
+        self.assertAlmostEqual(value, 1.1)
+
+    def test_lidar_range_rejects_invalid_or_insufficient_beams(self):
+        self.assertIsNone(select_lidar_range(
+            [float('nan'), float('inf'), 9.0],
+            angle_min=-0.1,
+            angle_increment=0.1,
+            target_bearing=0.0,
+            window_rad=0.2,
+            range_min=0.2,
+            range_max=4.0,
+            min_points=1,
+        ))
+        self.assertIsNone(select_lidar_range(
+            [1.0],
+            angle_min=0.0,
+            angle_increment=0.1,
+            target_bearing=0.0,
+            window_rad=0.1,
+            range_min=0.2,
+            range_max=4.0,
+            min_points=2,
+        ))
 
 
 if __name__ == '__main__':

@@ -45,6 +45,7 @@ def _launch_nodes(context, mission_share, config):
     rgb = _override(context, 'rgb_topic', profile.rgb_topic)
     depth = _override(context, 'depth_topic', profile.depth_topic)
     info = _override(context, 'camera_info_topic', profile.camera_info_topic)
+    range_source = _override(context, 'range_source', 'lidar')
     tf_topic = _override(context, 'tf_topic', profile.tf_topic)
     tf_static_topic = _override(
         context, 'tf_static_topic', profile.tf_static_topic)
@@ -139,8 +140,10 @@ def _launch_nodes(context, mission_share, config):
              remappings=tf_remaps),
         Node(package='tp_c_mission', executable='red_cone_detector', output='screen',
              parameters=[config, {'rgb_topic': rgb, 'depth_topic': depth,
+                                  'scan_topic': scan_topic,
                                   'camera_info_topic': info,
-                                  'require_aligned_depth': True,
+                                  'range_source': range_source,
+                                  'require_aligned_depth': False,
                                   'allow_latest_tf_fallback': False,
                                   'use_sim_time': use_sim_time}],
              remappings=tf_remaps),
@@ -182,5 +185,7 @@ def generate_launch_description():
                               default_value=_UNSET),
         DeclareLaunchArgument('camera_info_topic',
                               default_value=_UNSET),
+        DeclareLaunchArgument('range_source',
+                              default_value='lidar'),
         OpaqueFunction(function=_launch_nodes, args=[mission_share, config]),
     ])

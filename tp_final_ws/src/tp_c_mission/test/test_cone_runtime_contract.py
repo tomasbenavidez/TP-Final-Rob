@@ -15,6 +15,8 @@ BASE = {
     'max_depth_age': 0.20,
     'tf_available': True,
     'require_aligned_depth': True,
+    'range_source': 'depth',
+    'scan_fresh': False,
 }
 
 
@@ -49,6 +51,7 @@ def test_monocular_policy_does_not_require_depth():
 
     values = {
         **BASE,
+        'range_source': 'monocular',
         'require_aligned_depth': False,
         'depth_shape': None,
         'depth_stamp': None,
@@ -56,15 +59,42 @@ def test_monocular_policy_does_not_require_depth():
     assert evaluate_vision_readiness(**values) is None
 
 
-def test_real_launch_requires_depth_and_disables_latest_tf_fallback():
+def test_lidar_policy_requires_scan_but_not_depth():
+    from tp_c_mission.cone_detector_node import evaluate_vision_readiness
+
+    values = {
+        **BASE,
+        'range_source': 'lidar',
+        'require_aligned_depth': False,
+        'depth_shape': None,
+        'depth_stamp': None,
+        'scan_fresh': False,
+    }
+    assert evaluate_vision_readiness(**values) == 'scan_stale'
+    assert evaluate_vision_readiness(**{**values, 'scan_fresh': True}) is None
+
+
+def test_real_launch_uses_lidar_range_and_disables_latest_tf_fallback():
     from pathlib import Path
 
     launch = (
         Path(__file__).resolve().parents[1] / 'launch'
         / 'parte_c_real.launch.py').read_text()
 
-    assert "'require_aligned_depth': True" in launch
+    assert "range_source = _override(context, 'range_source', 'lidar')" in launch
+    assert "'range_source': range_source" in launch
+    assert "'require_aligned_depth': False" in launch
     assert "'allow_latest_tf_fallback': False" in launch
+    assert "'scan_topic': scan_topic" in launch
+
+
+def test_sim_and_bag_launches_keep_monocular_range_source():
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[1] / 'launch'
+
+    assert "'range_source': 'monocular'" in (root / 'parte_c_sim.launch.py').read_text()
+    assert "'range_source': 'monocular'" in (root / 'parte_c_bag.launch.py').read_text()
 
 
 def test_false_readiness_invalidates_mission_vision_immediately():

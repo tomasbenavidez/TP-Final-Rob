@@ -142,6 +142,47 @@ def pixel_to_camera(center_u, center_v, distance, fx, fy, cx, cy):
     )
 
 
+def pixel_bearing_rad(center_u, fx, cx):
+    """Bearing horizontal de un pixel respecto del eje óptico de la cámara."""
+    if fx <= 0:
+        return None
+    return math.atan2(float(center_u) - float(cx), float(fx))
+
+
+def select_lidar_range(
+    ranges,
+    *,
+    angle_min,
+    angle_increment,
+    target_bearing,
+    window_rad,
+    range_min,
+    range_max,
+    min_points,
+):
+    """Mediana de beams válidos alrededor de un bearing objetivo."""
+    if angle_increment <= 0.0 or window_rad < 0.0:
+        return None
+    valid = []
+    angle = float(angle_min)
+    for value in ranges:
+        delta = math.atan2(
+            math.sin(angle - target_bearing),
+            math.cos(angle - target_bearing),
+        )
+        r = float(value)
+        if (
+            abs(delta) <= window_rad
+            and math.isfinite(r)
+            and float(range_min) <= r <= float(range_max)
+        ):
+            valid.append(r)
+        angle += float(angle_increment)
+    if len(valid) < int(min_points):
+        return None
+    return float(np.median(np.asarray(valid, dtype=float)))
+
+
 class ConeTracker:
     def __init__(self, required_hits=3, window_size=5, max_center_distance_px=20.0):
         self.required_hits = int(required_hits)

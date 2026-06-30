@@ -116,33 +116,28 @@ ros2 topic pub --once "${CMD_VEL_TOPIC}" geometry_msgs/msg/Twist '{}'
 **No seguir** si falta algún sensor o TF, si aparecen tópicos del otro TB4, si
 hay un publisher de velocidad inesperado o si no funciona la parada manual.
 
-Para Parte C real, chequear además si la OAK-D publica depth. Esto no es
-necesario para Parte A/B, pero sí para que el detector de cono pueda estimar la
-posición del cono en `map`.
+Para Parte C real, el detector usa **RGB + LIDAR** por defecto: RGB identifica
+el cono rojo y el LIDAR estima la distancia en esa dirección. No hace falta
+depth de la OAK-D, pero sí confirmar que RGB, CameraInfo, `/scan` y TF están
+publicando. Si existe depth, queda como alternativa opcional.
 
 ```bash
-# [Notebook — buscar depth para Parte C]
+# [Notebook — inspección opcional de cámara/depth]
 source /tmp/tb4_lab_env.sh
 
 ros2 topic list | grep -Ei 'oak|depth|stereo|disparity|aligned|image_raw|camera_info'
 ```
 
-Si aparece un tópico candidato de depth alineado al RGB, definirlo y confirmar
-que publica una imagen con dimensiones compatibles:
+Si aparece un tópico candidato de depth alineado al RGB, se puede guardar para
+pruebas opcionales. Si no aparece, continuar igual con Parte C en modo LIDAR.
 
 ```bash
 # [Notebook — reemplazar por el tópico real encontrado]
 export DEPTH_TOPIC="/${ROBOT_NAME}/RUTA/DEPTH_ALINEADO"
 printf 'export DEPTH_TOPIC=%q\n' "${DEPTH_TOPIC}" >> /tmp/tb4_lab_env.sh
 
-ros2 topic echo --once "${RGB_TOPIC}" sensor_msgs/msg/Image \
-  | grep -E 'height:|width:|encoding:'
-ros2 topic echo --once "${DEPTH_TOPIC}" sensor_msgs/msg/Image \
-  | grep -E 'height:|width:|encoding:'
+ros2 topic info "${DEPTH_TOPIC}" -v
 ```
-
-Si no aparece ningún tópico de depth, continuar con Parte A/B pero no iniciar
-Parte C real: `vision_ready` debe quedar en `false` hasta tener RGB-D alineado.
 
 ## 3. Grabar el bag desde la notebook
 
@@ -371,36 +366,27 @@ Publicar nuevamente la pose inicial y enviar primero un único **2D Goal Pose**
 cercano, libre y despejado. Mantener la parada accesible. No probar múltiples
 goals ni obstáculos hasta que este recorrido sea seguro.
 
-## 9. Parte C — RGB-D y misión
+## 9. Parte C — cono rojo con RGB + LIDAR
 
-Detener Parte B, publicar velocidad cero y mantener el robot quieto. Buscar los
-tópicos depth disponibles:
+Detener Parte B, publicar velocidad cero y mantener el robot quieto. El perfil
+real usa `range_source:=lidar`: la cámara detecta el rojo y el LIDAR estima la
+distancia del cono.
 
 ```bash
-# [Notebook — identificar depth alineado]
+# [Notebook — confirmar entradas de Parte C real]
 source /tmp/tb4_lab_env.sh
 
 ros2 topic pub --once "${CMD_VEL_TOPIC}" geometry_msgs/msg/Twist '{}'
-ros2 topic list | grep -i depth
-ros2 topic list | grep -E 'stereo|aligned'
-```
-
-Definir el tópico que corresponda a **depth métrico alineado con el RGB**. Esta
-es la única línea que debe completarse durante el laboratorio:
-
-```bash
-# [Notebook — reemplazar por el tópico alineado real]
-export DEPTH_TOPIC="/${ROBOT_NAME}/RUTA/DEPTH_ALINEADO"
-printf 'export DEPTH_TOPIC=%q\n' "${DEPTH_TOPIC}" >> /tmp/tb4_lab_env.sh
-
 ros2 topic echo --once "${RGB_TOPIC}" sensor_msgs/msg/Image \
   | grep -E 'height:|width:|encoding:'
-ros2 topic echo --once "${DEPTH_TOPIC}" sensor_msgs/msg/Image \
-  | grep -E 'height:|width:|encoding:'
+ros2 topic echo --once "${CAMERA_INFO_TOPIC}" sensor_msgs/msg/CameraInfo \
+  | grep -E 'height:|width:'
+ros2 topic echo --once "${SCAN_TOPIC}" sensor_msgs/msg/LaserScan \
+  | grep -E 'angle_min:|angle_max:|angle_increment:|range_min:|range_max:'
 ```
 
-RGB y depth deben tener las mismas dimensiones, timestamps frescos y el mismo
-campo visual. **No lanzar Parte C** si no se puede demostrar la alineación.
+**No lanzar Parte C** si falta RGB, CameraInfo, `/scan` o TF. No hace falta
+depth para este modo.
 
 ```bash
 # [Notebook — Terminal 1: Parte C real]
@@ -413,7 +399,7 @@ ros2 launch tp_c_mission parte_c_real.launch.py \
   run_id:="${RUN_ID}" \
   map_yaml:="${MAP_YAML}" \
   landmark_map_file:="${TRAJECTORY_FILE}" \
-  depth_topic:="${DEPTH_TOPIC}" \
+  range_source:=lidar \
   enable_safety_gates:=true
 ```
 

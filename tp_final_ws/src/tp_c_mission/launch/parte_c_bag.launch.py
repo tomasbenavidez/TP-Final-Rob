@@ -66,6 +66,7 @@ def _launch_nodes(context, config, rviz_config):
                 'rgb_topic': rgb,
                 'depth_topic': depth,
                 'camera_info_topic': info,
+                'range_source': 'monocular',
                 'require_aligned_depth': False,
             }]),
         Node(
