@@ -532,7 +532,10 @@ def main(args=None):
             except Exception as exc:
                 node.get_logger().warn(
                     f'No se pudo publicar el mapa final durante shutdown: {exc}')
-        node.destroy_node()
+        try:
+            node.destroy_node()
+        except (KeyboardInterrupt, Exception):
+            pass
         if rclpy.ok():
             rclpy.try_shutdown()
 

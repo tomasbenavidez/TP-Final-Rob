@@ -254,11 +254,22 @@ python3 -m pytest tp_final_ws/src/tp_b_navigation/test -q
 python3 -m pytest tp_final_ws/src/tp_c_mission/test -q
 ```
 
-El smoke test de Parte A con rosbag se habilita explícitamente:
+Los smoke tests con rosbag son opt-in, usan un `ROS_DOMAIN_ID` aislado,
+redireccionan `/cmd_vel` a `/test/cmd_vel` y terminan todos los grupos de
+procesos con SIGINT/SIGTERM:
 
 ```bash
-RUN_ROS_SMOKE=1 python3 -m pytest tp_final_ws/src/tp_a_slam_aruco/test/test_ros_smoke.py -q
+RUN_ROS_SMOKE=1 \
+TP_TB4_TEST_BAG="$(pwd)/tp_final_ws/bags/laberinto" \
+TP_TB4_CONE_TEST_BAG="$(pwd)/tp_final_ws/bags/laberinto_conos" \
+python3 -m pytest \
+  tp_final_ws/src/tp_a_slam_aruco/test/test_ros_smoke.py \
+  tp_final_ws/src/tp_b_navigation/test/test_real_profile_smoke.py \
+  tp_final_ws/src/tp_c_mission/test/test_real_mission_smoke.py -q
 ```
+
+Sin esas variables, los smokes se omiten. Nunca deben ejecutarse apuntando al
+dominio ROS de un robot físico en movimiento.
 
 ## Contratos importantes
 

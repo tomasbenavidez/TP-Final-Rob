@@ -27,7 +27,13 @@ import rclpy
 from rclpy.node import Node
 from rclpy.duration import Duration
 from rclpy.executors import ExternalShutdownException
-from rclpy.qos import QoSProfile, DurabilityPolicy, ReliabilityPolicy, HistoryPolicy
+from rclpy.qos import (
+    QoSProfile,
+    DurabilityPolicy,
+    ReliabilityPolicy,
+    HistoryPolicy,
+    qos_profile_sensor_data,
+)
 
 from nav_msgs.msg import Odometry
 from geometry_msgs.msg import (
@@ -178,9 +184,9 @@ class MCL(Node):
         reference_odom_topic = str(
             self.get_parameter('reference_odom_topic').value)
         self.create_subscription(
-            Odometry, motion_odom_topic, self.motion_odom_cb, 20)
+            Odometry, motion_odom_topic, self.motion_odom_cb, qos_profile_sensor_data)
         self.create_subscription(
-            Odometry, reference_odom_topic, self.reference_odom_cb, 20)
+            Odometry, reference_odom_topic, self.reference_odom_cb, qos_profile_sensor_data)
         self.create_subscription(PoseArray, '/observed_landmarks',
                                  self.observation_cb, 10)
         self.create_subscription(

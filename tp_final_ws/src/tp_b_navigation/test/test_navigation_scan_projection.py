@@ -1,4 +1,5 @@
 import math
+from pathlib import Path
 
 import pytest
 
@@ -44,3 +45,13 @@ def test_transform_scan_points_drops_invalid_ranges_and_extra_angles():
     assert len(points) == len(expected)
     for point, expected_point in zip(points, expected):
         assert (point.base_x, point.base_y) == pytest.approx(expected_point)
+
+
+def test_obstacle_monitor_retries_latest_scan_after_tf_arrives():
+    source = (
+        Path(__file__).resolve().parents[1] / 'tp_b_navigation'
+        / 'obstacle_monitor.py').read_text()
+
+    assert 'self.pending_scan = scan' in source
+    assert 'self.create_timer(0.02, self._process_pending_scan)' in source
+    assert 'def _process_pending_scan(self):' in source

@@ -136,3 +136,15 @@ def test_only_first_identified_correction_is_allowed_while_stationary():
 
     assert len(calls) == 1
     assert not mcl.allow_stationary_identified_correction
+
+
+def test_motion_and_reference_odom_accept_best_effort_robot_qos():
+    from pathlib import Path
+
+    source = (
+        Path(__file__).resolve().parents[1] / 'tp_b_navigation'
+        / 'mcl_localization.py').read_text()
+
+    assert 'qos_profile_sensor_data' in source
+    assert 'self.motion_odom_cb, qos_profile_sensor_data' in source
+    assert 'self.reference_odom_cb, qos_profile_sensor_data' in source

@@ -142,3 +142,4 @@ def test_occupancy_grid_flushes_buffer_on_external_shutdown():
     assert 'except (KeyboardInterrupt, ExternalShutdownException):' in source
     assert 'node.finalize_scan_buffer()' in source
     assert 'if rclpy.ok():' in source
+    assert 'except (KeyboardInterrupt, Exception):' in source

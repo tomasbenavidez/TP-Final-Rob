@@ -119,6 +119,8 @@ class ObstacleMonitor(Node):
         self.tf_listener = TransformListener(self.tf_buffer, self)
         self.scans_skipped_no_tf = 0
         self.points_rejected_invalid_ranges = 0
+        self.pending_scan = None
+        self.create_timer(0.02, self._process_pending_scan)
 
         self.get_logger().info(
             f'obstacle_monitor activo (danger={self.danger} m, cono=±{math.degrees(self.cone):.0f}°).')
@@ -203,6 +205,13 @@ class ObstacleMonitor(Node):
         )
 
     def scan_cb(self, scan: LaserScan):
+        self.pending_scan = scan
+        self._process_pending_scan()
+
+    def _process_pending_scan(self):
+        scan = self.pending_scan
+        if scan is None:
+            return
         if self.occ is None:
             self.health_pub.publish(Bool(data=False))
             return
@@ -211,6 +220,7 @@ class ObstacleMonitor(Node):
             self.pub.publish(Bool(data=False))
             self.health_pub.publish(Bool(data=False))
             self._warn_safety_once(reason)
+            self.pending_scan = None
             return
         self.last_safety_reason = None
         try:
@@ -223,6 +233,7 @@ class ObstacleMonitor(Node):
                 throttle_duration_sec=2.0,
             )
             return  # sin localización todavía: no podemos discriminar mapeado/no-mapeado
+        self.pending_scan = None
         self.health_pub.publish(Bool(data=True))
 
         ranges = np.asarray(scan.ranges, dtype=float)
