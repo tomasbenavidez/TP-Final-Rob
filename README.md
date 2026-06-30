@@ -78,7 +78,10 @@ ros2 launch tp_slam_aruco parte_a_slam.launch.py \
 
 Al finalizar con `Ctrl+C`, el nodo guarda `/tmp/trayectoria.json`.
 
-Salidas principales: `/aruco_detections`, `/belief`, `/poses_guardadas`, `/trajectory_optimized`, `/landmarks` y TF `map → odom`.
+Salidas principales: `/aruco_detections`, `/aruco_base_debug`, `/belief`,
+`/poses_guardadas`, `/trajectory_optimized`, `/landmarks` y TF `map → odom`.
+Los diagnósticos de detección y geometría se guardan por defecto en
+`/tmp/aruco_detections.csv` y `/tmp/aruco_geometry_debug.csv`.
 
 ### Segunda pasada: grilla de ocupación
 
