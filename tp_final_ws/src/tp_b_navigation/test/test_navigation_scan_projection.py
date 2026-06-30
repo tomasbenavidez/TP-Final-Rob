@@ -47,11 +47,16 @@ def test_transform_scan_points_drops_invalid_ranges_and_extra_angles():
         assert (point.base_x, point.base_y) == pytest.approx(expected_point)
 
 
-def test_obstacle_monitor_retries_latest_scan_after_tf_arrives():
+def test_obstacle_monitor_keeps_pending_scan_until_tf_arrives():
     source = (
         Path(__file__).resolve().parents[1] / 'tp_b_navigation'
         / 'obstacle_monitor.py').read_text()
+    scan_cb = source[
+        source.index('    def scan_cb(self, scan: LaserScan):'):
+        source.index('    def _process_pending_scan(self):')
+    ]
 
+    assert 'if self.pending_scan is None:' in scan_cb
     assert 'self.pending_scan = scan' in source
     assert 'self.create_timer(0.02, self._process_pending_scan)' in source
     assert 'def _process_pending_scan(self):' in source

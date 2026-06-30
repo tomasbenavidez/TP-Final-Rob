@@ -205,7 +205,8 @@ class ObstacleMonitor(Node):
         )
 
     def scan_cb(self, scan: LaserScan):
-        self.pending_scan = scan
+        if self.pending_scan is None:
+            self.pending_scan = scan
         self._process_pending_scan()
 
     def _process_pending_scan(self):
