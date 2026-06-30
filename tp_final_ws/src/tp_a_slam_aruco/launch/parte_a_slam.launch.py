@@ -41,6 +41,7 @@ def _override(context, name, default):
 def _launch_nodes(context, pkg):
     profile = resolve_profile(BAG_TB4, robot_namespace=_arg(context, 'robot_namespace'))
     odom_topic = _override(context, 'odom_topic', profile.odom_topic)
+    scan_topic = _override(context, 'scan_topic', profile.scan_topic)
     image_topic = _override(context, 'image_topic', profile.rgb_topic)
     bag_tf_topic = _override(context, 'bag_tf_topic', profile.tf_topic)
     bag_tf_static_topic = _override(
@@ -48,6 +49,7 @@ def _launch_nodes(context, pkg):
     validate_tb4_topics(
         profile.robot_namespace,
         odom_topic=odom_topic,
+        scan_topic=scan_topic,
         image_topic=image_topic,
         bag_tf_topic=bag_tf_topic,
         bag_tf_static_topic=bag_tf_static_topic,
@@ -81,8 +83,11 @@ def _launch_nodes(context, pkg):
     write_resolved_platform(
         _arg(context, 'artifact_dir') or '/tmp/tp_final_rob',
         profile,
+        stage='parte-a-slam',
+        run_id=_arg(context, 'run_id'),
         topics={
             'odom_topic': odom_topic,
+            'scan_topic': scan_topic,
             'image_topic': image_topic,
             'bag_tf_topic': bag_tf_topic,
             'bag_tf_static_topic': bag_tf_static_topic,
@@ -173,6 +178,12 @@ def _launch_nodes(context, pkg):
         condition=IfCondition(launch_rviz),
         arguments=['-d', rviz_config],
         parameters=[{'use_sim_time': use_sim_time}],
+        remappings=[
+            ('/scan', scan_topic),
+            ('/odom', odom_topic),
+            ('/tf', '/tf'),
+            ('/tf_static', '/tf_static'),
+        ],
     )
 
     return [tf_bridge_node, aruco_node, graph_slam_node, rviz_node]
@@ -193,6 +204,7 @@ def generate_launch_description():
             default_value='/tmp/tp_final_rob',
             description='Directorio de artefactos donde registrar platform-resolved.yaml.',
         ),
+        DeclareLaunchArgument('run_id', default_value='manual'),
         DeclareLaunchArgument(
             'calibration_file',
             default_value='',
@@ -207,6 +219,11 @@ def generate_launch_description():
             'image_topic',
             default_value=_UNSET,
             description='Override de RGB; default: <robot_namespace>/oakd/rgb/preview/image_raw.',
+        ),
+        DeclareLaunchArgument(
+            'scan_topic',
+            default_value=_UNSET,
+            description='Override de scan; default: <robot_namespace>/scan.',
         ),
         DeclareLaunchArgument('kf_dist', default_value='0.15'),
         DeclareLaunchArgument('kf_angle_max', default_value='0.60'),
@@ -228,7 +245,7 @@ def generate_launch_description():
         ),
         DeclareLaunchArgument(
             'trajectory_file',
-            default_value=os.path.join(pkg, 'runs', 'trayectoria.json'),
+            default_value='/tmp/tp_final_rob/trajectory.json',
         ),
         DeclareLaunchArgument(
             'camera_frame',

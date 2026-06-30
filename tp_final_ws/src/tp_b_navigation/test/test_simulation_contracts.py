@@ -72,6 +72,16 @@ class SimulationContractsTest(unittest.TestCase):
         adapter_block = source[adapter:source.find('),', adapter) + 2]
         self.assertIn('remappings=tf_remaps', adapter_block)
 
+    def test_part_b_preserves_stage_artifact_and_remaps_rviz_sensors(self):
+        source = (PACKAGE_ROOT / 'launch' / 'parte_b.launch.py').read_text()
+
+        self.assertIn("stage='parte-b'", source)
+        self.assertIn("run_id=_arg(context, 'run_id')", source)
+        self.assertIn("DeclareLaunchArgument('run_id'", source)
+        start = source.index('rviz = Node(')
+        rviz = source[start:source.index('\n\n', start)]
+        self.assertIn('remappings=common_remaps', rviz)
+
     def test_part_b_exposes_real_safety_gate_parameters(self):
         source = (PACKAGE_ROOT / 'launch' / 'parte_b.launch.py').read_text()
 

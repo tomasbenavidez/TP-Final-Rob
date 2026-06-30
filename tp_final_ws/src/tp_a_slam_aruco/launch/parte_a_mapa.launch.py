@@ -54,6 +54,8 @@ def _launch_nodes(context):
     write_resolved_platform(
         _arg(context, 'artifact_dir') or '/tmp/tp_final_rob',
         profile,
+        stage='parte-a-mapa',
+        run_id=_arg(context, 'run_id'),
         topics={
             'odom_topic': odom_topic,
             'scan_topic': scan_topic,
@@ -126,6 +128,7 @@ def generate_launch_description():
             default_value='/tmp/tp_final_rob',
             description='Directorio de artefactos donde registrar platform-resolved.yaml.',
         ),
+        DeclareLaunchArgument('run_id', default_value='manual'),
         DeclareLaunchArgument(
             'trajectory_file',
             default_value=os.path.join(pkg, 'runs', 'trayectoria.json'),
@@ -155,7 +158,7 @@ def generate_launch_description():
         ),
         DeclareLaunchArgument(
             'map_output',
-            default_value=os.path.join(pkg, 'runs', 'mapa'),
+            default_value='/tmp/tp_final_rob/mapa',
         ),
         DeclareLaunchArgument('resolution', default_value='0.05'),
         DeclareLaunchArgument('max_angular_velocity', default_value='0.0'),

@@ -104,6 +104,8 @@ def _launch_nodes(context, pkg_share, landmarks_yaml):
     write_resolved_platform(
         _arg(context, 'artifact_dir') or '/tmp/tp_final_rob',
         profile,
+        stage='parte-b',
+        run_id=_arg(context, 'run_id'),
         topics={
             'odom_topic': odom_topic,
             'reference_odom_topic': truth_odom_topic,
@@ -230,7 +232,7 @@ def _launch_nodes(context, pkg_share, landmarks_yaml):
         package='rviz2', executable='rviz2', name='rviz2',
         arguments=['-d', rviz_config],
         parameters=[common],
-        remappings=tf_remaps,
+        remappings=common_remaps,
         condition=IfCondition(launch_rviz), output='screen')
 
     return [
@@ -256,6 +258,7 @@ def generate_launch_description():
         DeclareLaunchArgument(
             'artifact_dir', default_value='/tmp/tp_final_rob',
             description='Directorio de artefactos donde registrar platform-resolved.yaml.'),
+        DeclareLaunchArgument('run_id', default_value='manual'),
         DeclareLaunchArgument('map_yaml', default_value=_UNSET,
                               description=(
                                   'Override del mapa; default de perfil: '

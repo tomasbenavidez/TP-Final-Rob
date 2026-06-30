@@ -46,6 +46,8 @@ def _launch_nodes(context, config, rviz_config):
     write_resolved_platform(
         _arg(context, 'artifact_dir') or '/tmp/tp_final_rob',
         profile,
+        stage='parte-c-bag',
+        run_id=_arg(context, 'run_id'),
         topics={
             'rgb_topic': rgb,
             'depth_topic': depth,
@@ -91,6 +93,7 @@ def generate_launch_description():
             default_value='tb4_0',
             description='Namespace del TurtleBot4: tb4_0 o tb4_1.'),
         DeclareLaunchArgument('artifact_dir', default_value='/tmp/tp_final_rob'),
+        DeclareLaunchArgument('run_id', default_value='manual'),
         DeclareLaunchArgument('bag_path',
                               default_value='tp_final_ws/bags/laberinto_conos',
                               description='Ruta al rosbag2 de conos'),

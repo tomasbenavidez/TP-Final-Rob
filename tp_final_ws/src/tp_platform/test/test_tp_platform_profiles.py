@@ -82,15 +82,55 @@ def test_writes_resolved_platform_artifact(tmp_path):
     output = write_resolved_platform(
         tmp_path,
         profile,
+        stage='parte-b',
+        run_id='run-42',
         topics={'scan_topic': profile.scan_topic},
         frames={'base_frame': profile.base_frame},
         artifacts={'trajectory_file': '/tmp/run/trajectory.json'},
     )
 
-    assert output == tmp_path / 'config' / 'platform-resolved.yaml'
+    assert output == tmp_path / 'config' / 'platform-parte-b.yaml'
     text = output.read_text()
+    assert 'run_id: run-42' in text
     assert 'profile: real_tb4' in text
     assert 'robot_namespace: /tb4_1' in text
     assert 'scan_topic: /tb4_1/scan' in text
     assert 'base_frame: base_link' in text
     assert 'trajectory_file: /tmp/run/trajectory.json' in text
+
+
+def test_stage_artifacts_do_not_overwrite_each_other(tmp_path):
+    from tp_platform.platform_profiles import resolve_profile, write_resolved_platform
+
+    profile = resolve_profile('bag_tb4')
+    slam = write_resolved_platform(
+        tmp_path, profile, stage='parte-a-slam', run_id='run-42')
+    slam_bytes = slam.read_bytes()
+    mapping = write_resolved_platform(
+        tmp_path, profile, stage='parte-a-mapa', run_id='run-42')
+    navigation = write_resolved_platform(
+        tmp_path, profile, stage='parte-b', run_id='run-42')
+
+    assert slam.read_bytes() == slam_bytes
+    assert len({slam, mapping, navigation}) == 3
+    for output in (slam, mapping, navigation):
+        text = output.read_text()
+        assert 'run_id: run-42' in text
+        assert 'profile: bag_tb4' in text
+        assert 'robot_namespace: /tb4_0' in text
+        assert 'topics:' in text
+        assert 'frames:' in text
+        assert 'artifacts:' in text
+
+
+@pytest.mark.parametrize('stage', ['', '..', '../parte-b', 'parte/b'])
+def test_rejects_empty_or_path_containing_stage(stage, tmp_path):
+    from tp_platform.platform_profiles import resolve_profile, write_resolved_platform
+
+    with pytest.raises(ValueError, match='stage'):
+        write_resolved_platform(
+            tmp_path,
+            resolve_profile('simulation_tb3'),
+            stage=stage,
+            run_id='run-42',
+        )

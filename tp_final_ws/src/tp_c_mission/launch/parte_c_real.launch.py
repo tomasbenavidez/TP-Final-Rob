@@ -78,6 +78,8 @@ def _launch_nodes(context, mission_share, config):
     write_resolved_platform(
         _arg(context, 'artifact_dir') or '/tmp/tp_final_rob',
         profile,
+        stage='parte-c',
+        run_id=_arg(context, 'run_id'),
         topics={
             'odom_topic': odom_topic,
             'scan_topic': scan_topic,
@@ -158,6 +160,7 @@ def generate_launch_description():
                               choices=[REAL_TB4, BAG_TB4]),
         DeclareLaunchArgument('robot_namespace', default_value='tb4_0'),
         DeclareLaunchArgument('artifact_dir', default_value='/tmp/tp_final_rob'),
+        DeclareLaunchArgument('run_id', default_value='manual'),
         DeclareLaunchArgument('map_yaml'),
         DeclareLaunchArgument('landmark_map_file'),
         DeclareLaunchArgument('odom_topic', default_value=_UNSET),

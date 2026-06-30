@@ -1,5 +1,8 @@
 from dataclasses import dataclass, replace
+import os
 from pathlib import Path
+import re
+import tempfile
 
 
 SIMULATION_TB3 = 'simulation_tb3'
@@ -208,12 +211,19 @@ def _write_yaml_mapping(lines, name, values):
 def write_resolved_platform(
     artifact_dir,
     profile: PlatformProfile,
+    *,
+    stage,
+    run_id,
     topics=None,
     frames=None,
     artifacts=None,
 ):
+    if not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_-]*', str(stage or '')):
+        raise ValueError('stage debe ser un nombre simple no vacío')
+    if not str(run_id).strip():
+        raise ValueError('run_id no puede estar vacío')
     root = Path(artifact_dir or '/tmp/tp_platform')
-    output = root / 'config' / 'platform-resolved.yaml'
+    output = root / 'config' / f'platform-{stage}.yaml'
     output.parent.mkdir(parents=True, exist_ok=True)
 
     topic_values = {
@@ -241,6 +251,7 @@ def write_resolved_platform(
     artifact_values = artifacts or {}
 
     lines = [
+        f'run_id: {run_id}',
         f'profile: {profile.profile}',
         f'robot_namespace: {profile.robot_namespace}',
         f'use_sim_time: {_yaml_scalar(profile.use_sim_time)}',
@@ -250,5 +261,20 @@ def write_resolved_platform(
     _write_yaml_mapping(lines, 'topics', topic_values)
     _write_yaml_mapping(lines, 'frames', frame_values)
     _write_yaml_mapping(lines, 'artifacts', artifact_values)
-    output.write_text('\n'.join(lines) + '\n')
+    content = '\n'.join(lines) + '\n'
+    handle = tempfile.NamedTemporaryFile(
+        mode='w',
+        dir=output.parent,
+        prefix=f'.{output.name}.',
+        delete=False,
+    )
+    temporary = Path(handle.name)
+    try:
+        with handle:
+            handle.write(content)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, output)
+    finally:
+        temporary.unlink(missing_ok=True)
     return output
