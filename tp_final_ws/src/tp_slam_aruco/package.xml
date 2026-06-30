@@ -25,7 +25,7 @@
   <exec_depend>tf2_msgs</exec_depend>
   <exec_depend>cv_bridge</exec_depend>
   <exec_depend>builtin_interfaces</exec_depend>
-  <exec_depend>tp_slam_interfaces</exec_depend>
+  <exec_depend>tp_interfaces</exec_depend>
 
   <!-- NOTA: gtsam, opencv-contrib (aruco) y numpy se instalan vía pip,
        no son paquetes ROS. Ver README para el setup. -->

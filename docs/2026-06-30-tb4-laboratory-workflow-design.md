@@ -91,7 +91,7 @@ frames, fuentes de datos, parámetros físicos y nodos habilitados.
 
 Se realizarán, como cambios puramente estructurales:
 
-- `tp_slam_interfaces` → `tp_interfaces`;
+- el paquete heredado de interfaces de SLAM → `tp_interfaces`;
 - `tp_slam_aruco` → `tp_a_slam_aruco`.
 
 El primer paquete seguirá separado porque contiene mensajes compartidos por los

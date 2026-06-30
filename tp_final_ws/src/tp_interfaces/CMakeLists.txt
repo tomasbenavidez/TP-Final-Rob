@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.8)
-project(tp_slam_interfaces)
+project(tp_interfaces)
 
 # ROS 2 Humble's Python generators still use the FindPythonInterp and
 # FindPythonLibs modules removed by CMP0148's NEW behavior in CMake 3.27.

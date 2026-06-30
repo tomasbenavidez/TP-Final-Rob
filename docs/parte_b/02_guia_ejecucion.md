@@ -28,7 +28,7 @@ Linux:
 ```bash
 cd tp_final_ws
 colcon build --packages-select \
-  tp_slam_interfaces tp_slam_aruco tp_b_navigation \
+  tp_interfaces tp_slam_aruco tp_b_navigation \
   tp_c_mission turtlebot3_custom_simulation
 source install/setup.bash
 ```
@@ -39,7 +39,7 @@ macOS/RoboStack:
 rosenv
 cd tp_final_ws
 colcon build --packages-select \
-  tp_slam_interfaces tp_slam_aruco tp_b_navigation \
+  tp_interfaces tp_slam_aruco tp_b_navigation \
   tp_c_mission turtlebot3_custom_simulation
 source install/setup.zsh
 ```
@@ -48,14 +48,14 @@ En el Mac con RoboStack, el entorno `rosenv_mf` usa Python 3.11, NumPy 1.26.4 y
 pytest 7.4.4. Esta versión de pytest es necesaria porque el `launch_testing 1.0.4`
 de ROS 2 Humble no es compatible con pytest 9.
 
-Para reconstruir `tp_slam_interfaces` desde cero, abrí una terminal nueva, ejecutá
+Para reconstruir `tp_interfaces` desde cero, abrí una terminal nueva, ejecutá
 `rosenv` y borrá sus directorios **antes** de sourcear `install/setup.zsh`:
 
 ```bash
 cd tp_final_ws
-rm -rf build/tp_slam_interfaces install/tp_slam_interfaces
+rm -rf build/tp_interfaces install/tp_interfaces
 colcon build --packages-select \
-  tp_slam_interfaces tp_slam_aruco tp_b_navigation \
+  tp_interfaces tp_slam_aruco tp_b_navigation \
   tp_c_mission turtlebot3_custom_simulation \
   --cmake-args -DPython3_EXECUTABLE="$CONDA_PREFIX/bin/python3"
 source install/setup.zsh

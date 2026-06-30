@@ -21,7 +21,7 @@
   <exec_depend>rviz2</exec_depend>
   <exec_depend>tp_b_navigation</exec_depend>
   <exec_depend>tp_slam_aruco</exec_depend>
-  <exec_depend>tp_slam_interfaces</exec_depend>
+  <exec_depend>tp_interfaces</exec_depend>
   <test_depend>python3-pytest</test_depend>
   <export><build_type>ament_python</build_type></export>
 </package>

@@ -89,7 +89,7 @@ drivers del robot desde la notebook.
 [Notebook laboratorio]
 cd /ruta/al/checkout/TP-Final-Rob
 cd tp_final_ws
-colcon build --packages-select tp_slam_interfaces tp_slam_aruco \
+colcon build --packages-select tp_interfaces tp_slam_aruco \
   tp_b_navigation tp_c_mission turtlebot3_custom_simulation
 source install/setup.bash
 ```

@@ -20,7 +20,7 @@ TP-Final-Rob/
 │   ├── bags/                      # rosbags de Parte A (no versionados)
 │   └── src/
 │       ├── tp_slam_aruco/         # Parte A
-│       ├── tp_slam_interfaces/    # mensajes ROS compartidos
+│       ├── tp_interfaces/         # mensajes ROS compartidos
 │       ├── tp_b_navigation/       # Parte B
 │       ├── tp_c_mission/          # Parte C
 │       └── turtlebot3_custom_simulation/
@@ -45,7 +45,7 @@ Todos los comandos siguientes parten de la raíz del repositorio clonado:
 
 ```bash
 cd tp_final_ws
-colcon build --packages-select tp_slam_interfaces tp_slam_aruco \
+colcon build --packages-select tp_interfaces tp_slam_aruco \
   tp_b_navigation tp_c_mission turtlebot3_custom_simulation
 source install/setup.bash        # bash
 # source install/setup.zsh       # zsh

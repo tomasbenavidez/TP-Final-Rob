@@ -34,7 +34,7 @@ from geometry_msgs.msg import (
     PoseArray, Pose, PoseWithCovarianceStamped, TransformStamped,
 )
 from tf2_ros import TransformBroadcaster
-from tp_slam_interfaces.msg import LandmarkObservationArray
+from tp_interfaces.msg import LandmarkObservationArray
 
 from tp_b_navigation.utils import (
     normalize_angle, angle_diff, yaw_from_quaternion, quaternion_from_yaw,

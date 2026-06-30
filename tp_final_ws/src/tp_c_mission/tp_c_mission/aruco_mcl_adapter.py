@@ -9,7 +9,7 @@ from rclpy.node import Node
 from tf2_ros import Buffer, TransformListener
 from visualization_msgs.msg import MarkerArray
 
-from tp_slam_interfaces.msg import LandmarkObservation, LandmarkObservationArray
+from tp_interfaces.msg import LandmarkObservation, LandmarkObservationArray
 from tp_c_mission.cone_detector_node import _transform_point
 
 

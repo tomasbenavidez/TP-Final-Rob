@@ -1,4 +1,4 @@
-from tp_slam_interfaces.msg import (
+from tp_interfaces.msg import (
     LandmarkObservation,
     LandmarkObservationArray,
     VisualObservability,

@@ -17,7 +17,7 @@ mapas/                              mapa estático de referencia
 docs/parte_b/                       documentación y resultados de Parte B
 docs/parte_c/                       documentación y ejecución de Parte C
 tp_final_ws/src/tp_slam_aruco/      paquete de Parte A
-tp_final_ws/src/tp_slam_interfaces/ mensajes ROS propios
+tp_final_ws/src/tp_interfaces/      mensajes ROS propios
 tp_final_ws/src/tp_b_navigation/    paquete de Parte B
 tp_final_ws/src/tp_c_mission/       percepción y supervisor de Parte C
 ```
@@ -98,7 +98,7 @@ Desde la raíz del repositorio:
 
 ```bash
 cd tp_final_ws
-colcon build --packages-select tp_slam_interfaces tp_slam_aruco \
+colcon build --packages-select tp_interfaces tp_slam_aruco \
   tp_b_navigation tp_c_mission turtlebot3_custom_simulation
 source install/setup.bash
 ```
@@ -141,7 +141,7 @@ Con ROS 2 disponible, ejecutar además:
 
 ```bash
 cd tp_final_ws
-colcon build --packages-select tp_slam_interfaces tp_slam_aruco \
+colcon build --packages-select tp_interfaces tp_slam_aruco \
   tp_b_navigation tp_c_mission turtlebot3_custom_simulation
 source install/setup.bash
 python3 -m pytest src/tp_slam_aruco/test src/tp_b_navigation/test src/tp_c_mission/test -q

@@ -46,10 +46,10 @@ class BuildWarningContractsTest(unittest.TestCase):
                 source,
                 relative_path)
 
-    def test_slam_interfaces_selects_legacy_python_policy_locally(self):
+    def test_interfaces_selects_legacy_python_policy_locally(self):
         cmake_source = (
             REPO_ROOT / 'tp_final_ws' / 'src'
-            / 'tp_slam_interfaces' / 'CMakeLists.txt').read_text()
+            / 'tp_interfaces' / 'CMakeLists.txt').read_text()
         self.assertIn('if(POLICY CMP0148)', cmake_source)
         self.assertIn('cmake_policy(SET CMP0148 OLD)', cmake_source)
         self.assertNotIn('-Wno-dev', cmake_source)
