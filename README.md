@@ -17,8 +17,13 @@ está en [Parte A](docs/parte_a/tb4-map-comparison.md) y
 
 ## 1. Preparar la notebook
 
-Requisitos: Ubuntu con ROS 2 Humble, Miniforge en `~/miniforge3`, el entorno
-`rosenv_mf`, `colcon`, GTSAM, OpenCV contrib, SciPy y acceso SSH al TB4.
+Requisitos: notebook Ubuntu del laboratorio con ROS 2 Humble instalado en
+`/opt/ros/humble`, `colcon`, GTSAM, OpenCV contrib, SciPy, acceso SSH al TB4 y
+el paquete de teleoperación:
+
+```bash
+sudo apt install ros-humble-teleop-twist-keyboard
+```
 
 Abrir una terminal en la raíz del repositorio. Cambiar solamente
 `ROBOT_NAME` si se usa `tb4_1`. Este bloque compila el workspace y guarda todas
@@ -47,6 +52,8 @@ export CAMERA_INFO_TOPIC="${ROBOT_NS}/oakd/rgb/preview/camera_info"
 export CMD_VEL_TOPIC="${ROBOT_NS}/cmd_vel"
 export DEPTH_TOPIC=""
 
+source /opt/ros/humble/setup.bash
+
 mkdir -p "${RUN_ROOT}/acquisition" "${RUN_ROOT}/parte_a" \
   "${RUN_ROOT}/config" "${RUN_ROOT}/logs"
 
@@ -71,16 +78,13 @@ export RGB_TOPIC="${RGB_TOPIC}"
 export CAMERA_INFO_TOPIC="${CAMERA_INFO_TOPIC}"
 export CMD_VEL_TOPIC="${CMD_VEL_TOPIC}"
 export DEPTH_TOPIC=""
-source "${HOME}/miniforge3/etc/profile.d/conda.sh"
-conda activate rosenv_mf
+source /opt/ros/humble/setup.bash
 source "${WS_ROOT}/install/setup.bash"
 EOF
 
-source "${HOME}/miniforge3/etc/profile.d/conda.sh"
-conda activate rosenv_mf
 cd "${WS_ROOT}"
 colcon build --packages-select tp_platform tp_interfaces tp_a_slam_aruco \
-  tp_b_navigation tp_c_mission
+  tp_b_navigation tp_c_mission turtlebot3_custom_simulation
 source install/setup.bash
 echo "RUN_ID=${RUN_ID}"
 echo "Artefactos: ${RUN_ROOT}"
@@ -138,9 +142,22 @@ ssh -t "${TB4_SSH_HOST}" "bash -lc 'source /opt/ros/humble/setup.bash && ros2 ba
   -o tb4_laboratorio_runs/${RUN_ID}/acquisition/laberinto'"
 ```
 
-Teleoperar a velocidad reducida, cubrir el laberinto y reobservar los ArUco.
-Detener físicamente el robot y recién entonces presionar `Ctrl+C`. Esperar a
-que rosbag cierre `metadata.yaml`.
+En otra terminal de la notebook, teleoperar a velocidad reducida. El remap es
+importante: evita publicar por accidente en `/cmd_vel` global y manda comandos
+al TB4 seleccionado.
+
+```bash
+# [Notebook — Terminal de teleop]
+source /tmp/tb4_lab_env.sh
+
+ros2 run teleop_twist_keyboard teleop_twist_keyboard \
+  --ros-args -r /cmd_vel:="${CMD_VEL_TOPIC}"
+```
+
+Durante la grabación, cubrir el laberinto despacio y reobservar los ArUco desde
+varios ángulos. Detener físicamente el robot y recién entonces presionar
+`Ctrl+C` en la terminal de grabación. Esperar a que rosbag cierre
+`metadata.yaml`.
 
 ```bash
 # [Notebook — validar y copiar el bag]
@@ -197,6 +214,20 @@ test -s "${RUN_ROOT}/config/platform-parte-a-slam.yaml"
 **Esperar:** trayectoria continua, landmarks razonables y `map -> odom` sin
 saltos severos en RViz. Si el JSON está vacío o la trayectoria diverge, no
 generar el mapa.
+
+Diagnósticos útiles de esta pasada:
+
+- `/aruco_detections`: detecciones ArUco crudas en frame de cámara;
+- `/landmarks`: landmarks ArUco optimizados por Graph SLAM;
+- `/aruco_base_debug`: puntos de depuración transformados hacia `base_link`;
+- CSV de diagnóstico, por defecto `/tmp/aruco_detections.csv` y
+  `/tmp/aruco_geometry_debug.csv` si no se pasan rutas explícitas.
+
+En el flujo de laboratorio el JSON se guarda en `${TRAJECTORY_FILE}`. Los
+defaults históricos de desarrollo eran `/tmp/trayectoria.json` para la
+trayectoria y `/tmp/mapa.yaml` para el mapa; se mantienen como referencia para
+entender tests y documentación vieja, pero no son los nombres recomendados para
+la corrida física.
 
 ## 5. Parte A — pasada 2: mapa
 
