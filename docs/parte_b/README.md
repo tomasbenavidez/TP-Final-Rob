@@ -27,7 +27,7 @@ ros2 launch tp_b_navigation parte_b.launch.py
 
 ## Carpetas
 - `scripts/` — `setup_parte_b.sh` (entorno), `cyclonedds_loopback.xml` (DDS), `gen_landmarks.py`
-  (generador de los 36 landmarks).
+  (generador configurable; actualmente produce 60 landmarks).
 - `img/` — gráficos de los resultados (mapa + landmarks + ruta + trayectoria real vs MCL).
 
 ## Estado al cierre

@@ -16,6 +16,7 @@ from std_srvs.srv import Trigger
 from visualization_msgs.msg import Marker, MarkerArray
 
 from tp_b_navigation.planner_core import GridPlannerCore
+from tp_b_navigation.dynamic_obstacles import apply_dynamic_obstacles
 from tp_b_navigation.landmark_io import load_landmark_map
 from tp_b_navigation.utils import quaternion_from_yaw
 from tp_c_mission.information_exploration import (
@@ -64,6 +65,13 @@ class MissionManager(Node):
         self.policy = InformationPolicy()
         self.planner = None
         self.coverage = None
+        # Planner de navegación: estático + capa dinámica, consistente con el
+        # global_planner. Se reconstruye barato (sin recalcular visibilidad) sólo
+        # para validar aproximaciones; la exploración sigue sobre el estático.
+        self.static_data = None
+        self.dynamic_data = None
+        self.nav_planner = None
+        self.nav_dirty = True
         self.map_signature = None
         self.pose = None
         self.covariance_scale = 1.0
@@ -90,6 +98,8 @@ class MissionManager(Node):
             durability=DurabilityPolicy.TRANSIENT_LOCAL,
             reliability=ReliabilityPolicy.RELIABLE)
         self.create_subscription(OccupancyGrid, '/map', self.map_cb, latched)
+        self.create_subscription(OccupancyGrid, '/dynamic_obstacles',
+                                 self.dynamic_cb, latched)
         self.create_subscription(PoseWithCovarianceStamped, '/mcl_pose', self.pose_cb, 10)
         self.create_subscription(PoseWithCovarianceStamped, '/red_cone_pose',
                                  self.cone_cb, 10)
@@ -125,15 +135,50 @@ class MissionManager(Node):
             msg.info.origin.position.y, robot_radius=self.robot_radius,
             clearance_weight=self.clearance_weight, clearance_max=self.clearance_max,
             allow_unknown=False)
+        self.static_data = data
+        self.nav_planner = None
+        self.nav_dirty = True
         self.coverage = CoverageBelief(self.planner)
         self.map_signature = signature
         self.candidate_poses = list(sample_candidate_poses(
             self.planner, self.spacing, self.yaw_samples))
+        # El ray-casting de cada vista candidata es invariante al estado del
+        # robot: se precalcula una vez por mapa en vez de en cada tick.
+        self.coverage.precompute_visibility(
+            self.candidate_poses, self.fov, self.camera_range)
         if had_map:
             self.visited.clear()
             self.exhausted.clear()
             self.current_goal = None
             self.pending_goal_evaluation = None
+
+    def dynamic_cb(self, msg):
+        if self.planner is None:
+            return
+        if (msg.info.width != self.planner.width
+                or msg.info.height != self.planner.height):
+            return
+        self.dynamic_data = np.asarray(msg.data, dtype=np.int16).reshape(
+            msg.info.height, msg.info.width)
+        self.nav_dirty = True
+
+    def _navigation_planner(self):
+        """Grilla estático + dinámica, igual que el global_planner.
+
+        Sin capa dinámica disponible, cae al planner estático (compatibilidad
+        con el robot real o con el monitor apagado).
+        """
+        if self.planner is None or self.static_data is None or self.dynamic_data is None:
+            return self.planner
+        if self.nav_planner is None or self.nav_dirty:
+            merged = apply_dynamic_obstacles(self.static_data, self.dynamic_data)
+            self.nav_planner = GridPlannerCore.from_occupancy(
+                merged, self.planner.resolution, self.planner.origin_x,
+                self.planner.origin_y, robot_radius=self.robot_radius,
+                clearance_weight=self.clearance_weight,
+                clearance_max=self.clearance_max, allow_unknown=False)
+            self.nav_dirty = False
+        return self.nav_planner
 
     def pose_cb(self, msg):
         pose = msg.pose.pose
@@ -185,8 +230,11 @@ class MissionManager(Node):
         if not self.active or self.approaching or self.planner is None or self.pose is None:
             return
         cone = (msg.pose.pose.position.x, msg.pose.pose.position.y)
+        # Validar contra el mismo grid que planea el navegador (estático +
+        # obstáculos dinámicos), para no proponer poses que A* después rechaza.
         approach = select_approach_pose(
-            self.planner, self.pose[:2], cone, standoff=self.standoff, samples=24)
+            self._navigation_planner(), self.pose[:2], cone,
+            standoff=self.standoff, samples=24)
         if approach is None:
             self.get_logger().warn('Cono confirmado sin aproximación alcanzable; sigo explorando.')
             return
@@ -270,7 +318,7 @@ class MissionManager(Node):
             (2.0 * self.planner.resolution ** 2),
         )
         for pose in self.candidate_poses:
-            unseen, _visible = self.coverage.gain(pose, self.fov, self.camera_range)
+            unseen = self.coverage.unseen_count(pose, self.fov, self.camera_range)
             if unseen == 0:
                 continue
             coverage_gain = min(1.0, unseen / max_visible_cells)

@@ -70,6 +70,8 @@ class MCL(Node):
         self.declare_parameter('global_frame', 'map')
         self.declare_parameter('odom_frame', 'odom')
         self.declare_parameter('base_frame', 'base_footprint')
+        self.declare_parameter('motion_odom_topic', '/odom')
+        self.declare_parameter('reference_odom_topic', '/odom')
         self.declare_parameter('tf_publish_rate', 30.0)
         # Tolerancia de transformación: la TF map->odom se publica con el timestamp adelantado
         # este tanto, para que siga siendo válida para lookups a tiempos un poco futuros (p.ej.
@@ -105,8 +107,8 @@ class MCL(Node):
 
         self.landmarks = None        # array Mx2 (posiciones conocidas en map)
         self.landmarks_by_id = {}
-        self.last_odom = None        # (x, y, theta) de la última odometría procesada
-        self.last_odom_pose = None   # pose de odom actual (para TF map->odom)
+        self.last_motion_odom = None  # última pose usada por el modelo de movimiento
+        self.last_odom_pose = None    # pose de referencia para TF map->odom
         self.accum_d = 0.0           # movimiento acumulado desde la última corrección
         self.accum_a = 0.0
         self.estimate = None         # (x, y, theta) estimado en map
@@ -118,7 +120,14 @@ class MCL(Node):
             reliability=ReliabilityPolicy.RELIABLE)
 
         self.create_subscription(PoseArray, '/landmarks', self.landmarks_cb, qos_latched)
-        self.create_subscription(Odometry, '/odom', self.odom_cb, 20)
+        motion_odom_topic = str(
+            self.get_parameter('motion_odom_topic').value)
+        reference_odom_topic = str(
+            self.get_parameter('reference_odom_topic').value)
+        self.create_subscription(
+            Odometry, motion_odom_topic, self.motion_odom_cb, 20)
+        self.create_subscription(
+            Odometry, reference_odom_topic, self.reference_odom_cb, 20)
         self.create_subscription(PoseArray, '/observed_landmarks',
                                  self.observation_cb, 10)
         self.create_subscription(
@@ -142,7 +151,9 @@ class MCL(Node):
                 f'Cargados {len(self.landmarks_by_id)} landmarks ArUco con ID.')
 
         self.get_logger().info(
-            f'MCL iniciado con {self.N} partículas. Esperando /initialpose '
+            f'MCL iniciado con {self.N} partículas '
+            f'(movimiento={motion_odom_topic}, referencia={reference_odom_topic}). '
+            f'Esperando /initialpose '
             f'(usar "2D Pose Estimate" en RViz).')
 
     # ------------------------------------------------------------------ entradas
@@ -176,20 +187,28 @@ class MCL(Node):
         # mission_manager de Parte C, que exige /mcl_pose para arrancar) quedan bloqueados.
         self.publish_pose()
 
-    def odom_cb(self, msg: Odometry):
+    def motion_odom_cb(self, msg: Odometry):
         p = msg.pose.pose
         cur = (p.position.x, p.position.y, yaw_from_quaternion(p.orientation))
-        self.last_odom_pose = cur
 
         if not self.initialized:
-            self.last_odom = cur
+            self.last_motion_odom = cur
             return
-        if self.last_odom is None:
-            self.last_odom = cur
+        if self.last_motion_odom is None:
+            self.last_motion_odom = cur
             return
 
-        self._predict(self.last_odom, cur)
-        self.last_odom = cur
+        self._predict(self.last_motion_odom, cur)
+        self.last_motion_odom = cur
+
+    def reference_odom_cb(self, msg: Odometry):
+        """Guarda T_odom_base para construir la TF sin contaminar la predicción."""
+        p = msg.pose.pose
+        self.last_odom_pose = (
+            p.position.x,
+            p.position.y,
+            yaw_from_quaternion(p.orientation),
+        )
 
     def observation_cb(self, msg: PoseArray):
         if not self.initialized or self.landmarks is None:

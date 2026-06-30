@@ -120,7 +120,7 @@ regenerar `config/landmarks.yaml` sobre su geometría — ver `gen_landmarks.py`
   **100% de cobertura** de las paredes del mapa del profe (norte y sur), alineación casi perfecta
   (1822 celdas de pared vs 1660 del profe). Único defecto cosmético: un pequeño remolino de ruido
   sobre la pared oeste (donde el robot quedó girando), inofensivo para la navegación.
-- `config/landmarks.yaml`: **regenerado** (36 landmarks por farthest-point sampling sobre
+- `config/landmarks.yaml`: **regenerado** (60 landmarks por farthest-point sampling sobre
   `map_sim`; `gen_landmarks.py` ahora apunta a `map_sim.yaml` por default).
 - `map_loader.py` y `parte_b.launch.py`: **default instalado =
   `share/tp_b_navigation/maps/map_sim.yaml`** (el del profe queda disponible vía

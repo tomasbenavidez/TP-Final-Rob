@@ -12,30 +12,31 @@ find_package(rclcpp REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(tf2 REQUIRED)
 find_package(tf2_msgs REQUIRED)
-find_package(turtlebot3_msgs REQUIRED)
-
-include_directories(include)
-
-set(dependencies
-  geometry_msgs
-  nav_msgs
-  rclcpp
-  sensor_msgs
-  tf2
-  tf2_msgs
-  turtlebot3_msgs
-)
 
 set(EXEC_NAME turtlebot3_custom_simulation)
 
 add_executable(${EXEC_NAME} src/turtlebot3_custom_simulation.cpp)
-
-ament_target_dependencies(${EXEC_NAME} ${dependencies})
+target_compile_features(${EXEC_NAME} PRIVATE cxx_std_17)
+target_include_directories(${EXEC_NAME} PRIVATE
+  include
+)
+target_link_libraries(${EXEC_NAME} PRIVATE
+  rclcpp::rclcpp
+  tf2::tf2
+  geometry_msgs::geometry_msgs__rosidl_typesupport_cpp
+  nav_msgs::nav_msgs__rosidl_typesupport_cpp
+  sensor_msgs::sensor_msgs__rosidl_typesupport_cpp
+  tf2_msgs::tf2_msgs__rosidl_typesupport_cpp
+)
 
 if(APPLE)
+  # Some RoboStack exports over-link every available typesupport and Python
+  # generator.  Remove dylibs that this C++ executable does not actually use.
+  target_link_options(${EXEC_NAME} PRIVATE LINKER:-dead_strip_dylibs)
+  # Derive the runtime search paths from the imported ROS targets.  This keeps
+  # RoboStack relocatable and avoids hard-coding Conda or user-specific paths.
   set_target_properties(${EXEC_NAME} PROPERTIES
-    BUILD_WITH_INSTALL_RPATH TRUE
-    INSTALL_RPATH "${CONDA_PREFIX}/lib"
+    INSTALL_RPATH_USE_LINK_PATH TRUE
   )
 endif()
 
@@ -62,5 +63,4 @@ ament_export_dependencies(rclcpp)
 ament_export_dependencies(sensor_msgs)
 ament_export_dependencies(tf2)
 ament_export_dependencies(tf2_msgs)
-ament_export_dependencies(turtlebot3_msgs)
 ament_package()

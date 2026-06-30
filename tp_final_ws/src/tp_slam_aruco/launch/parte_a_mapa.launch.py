@@ -37,6 +37,12 @@ def generate_launch_description():
         default_value=os.path.join(pkg, 'runs', 'trayectoria.json'),
         description='JSON con la trayectoria optimizada (salida de parte_a_slam)',
     )
+    odom_topic_arg = DeclareLaunchArgument(
+        'odom_topic',
+        default_value='/tb4_0/odom',
+        description='Odometría física del TurtleBot4 o del rosbag.',
+    )
+    odom_topic = LaunchConfiguration('odom_topic')
     map_output_arg = DeclareLaunchArgument(
         'map_output',
         default_value=os.path.join(pkg, 'runs', 'mapa'),
@@ -64,7 +70,7 @@ def generate_launch_description():
             'map_output':      LaunchConfiguration('map_output'),
             'resolution':      LaunchConfiguration('resolution'),
             'scan_topic':      'tb4_0/scan',
-            'odom_topic':      'tb4_0/odom',
+            'odom_topic':      odom_topic,
             'publish_every':   50,
             # Extrinsecos LIDAR del TF estatico del bag:
             #   base_link -> shell_link (yaw 0) -> rplidar_link (tx=-0.04, yaw=+90deg)
@@ -78,6 +84,7 @@ def generate_launch_description():
     return LaunchDescription([
         SetParameter(name='use_sim_time', value=True),
         trajectory_file_arg,
+        odom_topic_arg,
         map_output_arg,
         resolution_arg,
         max_angular_velocity_arg,

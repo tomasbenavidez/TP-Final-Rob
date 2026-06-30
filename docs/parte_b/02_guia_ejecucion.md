@@ -1,8 +1,8 @@
 # Parte B — Guía de ejecución (correr todo + sacar screenshots)
 
 Instrucciones para levantar el ciclo completo de Parte B, qué se ve en cada paso, qué comandos
-usar en **Gazebo** y **RViz**, y qué screenshots faltan. Pensado para correr en el Mac del equipo
-(ROS 2 Humble por RoboStack, env conda `rosenv`).
+usar en **Gazebo** y **RViz**, y qué screenshots faltan. Los paquetes usan los mismos launch
+en ROS 2 Humble sobre Linux y sobre macOS/RoboStack.
 
 Salvo que se indique lo contrario, los comandos parten de la raíz del repositorio clonado.
 
@@ -16,17 +16,61 @@ Salvo que se indique lo contrario, los comandos parten de la raíz del repositor
 >   y fija el DDS de una). Hace falta sí o sí si corrés en un zsh **no-interactivo** (scripts,
 >   tareas automáticas), donde `setup.zsh` aborta por los errores de `compdef`.
 >
-> En una PC Linux normal alcanzaría con `source install/setup.zsh` (o `.bash`) y los `ros2 launch`
-> de siempre.
+> En Linux alcanza con `source tp_final_ws/install/setup.bash`. No hace falta Conda ni configurar
+> un RPATH manual.
 
 ---
 
 ## 0. Compilar (una vez)
 
+Linux:
+
 ```bash
-source docs/parte_b/scripts/setup_parte_b.sh
 cd tp_final_ws
-colcon build --packages-select tp_b_navigation
+colcon build --packages-select \
+  tp_slam_interfaces tp_slam_aruco tp_b_navigation \
+  tp_c_mission turtlebot3_custom_simulation
+source install/setup.bash
+```
+
+macOS/RoboStack:
+
+```zsh
+rosenv
+cd tp_final_ws
+colcon build --packages-select \
+  tp_slam_interfaces tp_slam_aruco tp_b_navigation \
+  tp_c_mission turtlebot3_custom_simulation
+source install/setup.zsh
+```
+
+En el Mac con RoboStack, el entorno `rosenv_mf` usa Python 3.11, NumPy 1.26.4 y
+pytest 7.4.4. Esta versión de pytest es necesaria porque el `launch_testing 1.0.4`
+de ROS 2 Humble no es compatible con pytest 9.
+
+Para reconstruir `tp_slam_interfaces` desde cero, abrí una terminal nueva, ejecutá
+`rosenv` y borrá sus directorios **antes** de sourcear `install/setup.zsh`:
+
+```bash
+cd tp_final_ws
+rm -rf build/tp_slam_interfaces install/tp_slam_interfaces
+colcon build --packages-select \
+  tp_slam_interfaces tp_slam_aruco tp_b_navigation \
+  tp_c_mission turtlebot3_custom_simulation \
+  --cmake-args -DPython3_EXECUTABLE="$CONDA_PREFIX/bin/python3"
+source install/setup.zsh
+```
+
+Si se borra un paquete después de sourcear el workspace en la misma terminal,
+`AMENT_PREFIX_PATH` y `CMAKE_PREFIX_PATH` conservan temporalmente la ruta eliminada
+y `colcon` avisa que no existe. Una terminal nueva evita esos warnings sin editar
+manualmente las variables de entorno.
+
+Si se actualizó el enlazado de `turtlebot3_custom_simulation`, forzá una
+reconfiguración portable sin borrar el resto del workspace:
+
+```bash
+colcon build --packages-select turtlebot3_custom_simulation --cmake-clean-cache
 ```
 
 ---
@@ -42,7 +86,8 @@ ros2 launch turtlebot3_custom_simulation custom_casa.launch.py
 ```
 
 **Qué se ve en Gazebo:** la casa (el mismo entorno cuyo mapa generó la Parte A) con el TurtleBot3
-*burger* spawneado en el origen `(0,0)`. Publica `/scan` (LIDAR), `/odom`, `/clock` y la TF
+*burger* spawneado en el origen `(0,0)`. Publica `/scan` (LIDAR), `/odom` como verdad
+simulada, `/calc_odom` para la predicción, `/clock` y la TF
 `odom→base_footprint`.
 
 > En `custom_casa_obs` aparecen además obstáculos (valijas/sofá/mesa) que **no están en el mapa**.
@@ -91,7 +136,7 @@ La config `parte_b.rviz` ya trae los displays. Fixed frame = `map`.
 | Display | Topic | Qué se ve |
 |---|---|---|
 | Map | `/map` | la grilla de ocupación de la casa |
-| Landmarks GT | `/landmarks_markers` | 36 estrellas/cilindros verdes sobre las paredes |
+| Landmarks GT | `/landmarks_markers` | 60 estrellas/cilindros verdes sobre las paredes |
 | Observed Landmarks | `/observed_landmarks_markers` | puntos naranjas: lo que la "cámara" ve este frame |
 | LaserScan | `/scan` | el LIDAR (best_effort) |
 | MCL Particles | `/particlecloud` | la nube de partículas del filtro |
@@ -142,6 +187,15 @@ ros2 topic pub --once /goal_pose geometry_msgs/msg/PoseStamped \
   pone `RMW_IMPLEMENTATION=rmw_cyclonedds_cpp` + `CYCLONEDDS_URI` apuntando a
   `scripts/cyclonedds_loopback.xml` (loopback unicast, `MaxAutoParticipantIndex=100`). **Todas las
   terminales** deben tener el mismo `source`.
+- **`/calc_odom` no publica:** primero comprobá que el nodo calculador siga vivo:
+  `ros2 node info /calculated_odometry` y luego
+  `ros2 topic echo --once /calc_odom`. El ejecutable publica aun estando quieto.
+  El smoke test automatizado se ejecuta, después del build y de sourcear el workspace, con
+  `RUN_ROS_SMOKE=1 python3 -m pytest
+  src/tp_b_navigation/test/test_calc_odom_smoke.py -q`.
+  En macOS, `otool -l install/turtlebot3_custom_simulation/lib/turtlebot3_custom_simulation/turtlebot3_custom_simulation`
+  debe mostrar un RPATH derivado del entorno ROS y nunca `/lib`; en Linux se puede inspeccionar
+  el mismo binario con `ldd`.
 - **No uses `ROS_LOCALHOST_ONLY=1`** con FastDDS: crashea gzserver (`foonathan::memory`).
 - **Reiniciaste Gazebo:** reiniciá también la pila de Parte B. Al reiniciar Gazebo el reloj de
   simulación vuelve a 0 y los nodos vivos quedan con TF viejas (`TF_OLD_DATA`) → planean con poses

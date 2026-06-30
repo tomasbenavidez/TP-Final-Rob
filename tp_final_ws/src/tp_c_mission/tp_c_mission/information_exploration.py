@@ -51,6 +51,31 @@ class CoverageBelief:
     def __init__(self, planner):
         self.planner = planner
         self.observed = np.asarray(planner.blocked, dtype=bool).copy()
+        # Cache de visibilidad por pose candidata. El ray-casting de una vista
+        # depende sólo de (celda, yaw) y del mapa estático; sólo cambia cuántas
+        # de esas celdas siguen sin observar. Precalcularlo una vez evita repetir
+        # el ray-casting de miles de poses en cada tick del supervisor.
+        self._visibility = None       # dict: pose -> índices planos visibles
+        self._cache_params = None     # (fov, max_range) con que se precalculó
+
+    def precompute_visibility(self, poses, fov, max_range):
+        """Precalcula las celdas visibles de cada pose como índices planos."""
+        width = self.planner.width
+        cache = {}
+        for pose in poses:
+            cells = self.planner.visible_cells(pose, fov, max_range)
+            cache[pose] = np.fromiter(
+                (row * width + col for row, col in cells),
+                dtype=np.intp, count=len(cells))
+        self._visibility = cache
+        self._cache_params = (float(fov), float(max_range))
+        return cache
+
+    def _cached_indices(self, pose, fov, max_range):
+        if (self._visibility is None
+                or self._cache_params != (float(fov), float(max_range))):
+            return None
+        return self._visibility.get(pose)
 
     def observe(self, pose, fov, max_range):
         cells = self.planner.visible_cells(pose, fov, max_range)
@@ -58,8 +83,21 @@ class CoverageBelief:
             self.observed[cell] = True
         return cells
 
-    def gain(self, pose, fov, max_range):
+    def unseen_count(self, pose, fov, max_range):
+        """Sólo el número de celdas nuevas; ruta caliente del supervisor."""
+        indices = self._cached_indices(pose, fov, max_range)
+        if indices is not None:
+            return int(np.count_nonzero(~self.observed.reshape(-1)[indices]))
         cells = self.planner.visible_cells(pose, fov, max_range)
+        return sum(not self.observed[cell] for cell in cells)
+
+    def gain(self, pose, fov, max_range):
+        indices = self._cached_indices(pose, fov, max_range)
+        if indices is not None:
+            width = self.planner.width
+            cells = {(int(idx) // width, int(idx) % width) for idx in indices}
+        else:
+            cells = self.planner.visible_cells(pose, fov, max_range)
         unseen = sum(not self.observed[cell] for cell in cells)
         return unseen, cells
 

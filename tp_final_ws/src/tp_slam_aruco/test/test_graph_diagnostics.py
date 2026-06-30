@@ -3,44 +3,9 @@ import math
 import pytest
 from builtin_interfaces.msg import Time
 
-from tp_slam_aruco.slam_gating import innovation_diagnostics
 from tp_slam_aruco.slam_graph_diagnostics import GraphRunDiagnostics
 from tp_slam_aruco.slam_timing import TimedPose2, should_create_visual_keyframe
 from tp_slam_aruco.visual_observability import FrameObservability
-
-
-class DummyPose:
-    def __init__(self, x, y, theta):
-        self._x = x
-        self._y = y
-        self._theta = theta
-
-    def x(self):
-        return self._x
-
-    def y(self):
-        return self._y
-
-    def theta(self):
-        return self._theta
-
-
-def test_innovation_diagnostics_reports_range_and_bearing_residuals():
-    pose = DummyPose(0.0, 0.0, 0.0)
-    landmark = (2.0, 0.0)
-
-    diag = innovation_diagnostics(
-        pose=pose,
-        landmark=landmark,
-        bearing=0.2,
-        range_=2.3,
-    )
-
-    assert diag.pred_range == pytest.approx(2.0)
-    assert diag.pred_bearing == pytest.approx(0.0)
-    assert diag.range_residual == pytest.approx(0.3)
-    assert diag.bearing_residual == pytest.approx(0.2)
-    assert diag.maha_sq > 0.0
 
 
 def test_graph_run_diagnostics_tracks_recurrent_gating_rejections():

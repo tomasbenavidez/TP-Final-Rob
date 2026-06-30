@@ -41,6 +41,8 @@ def generate_launch_description():
         Node(package='tp_b_navigation', executable='mcl_localization', output='screen',
              parameters=[{'landmark_map_file': landmark_map, 'base_frame': base_frame,
                           'odom_frame': odom_frame,
+                          'motion_odom_topic': LaunchConfiguration('odom_topic'),
+                          'reference_odom_topic': LaunchConfiguration('odom_topic'),
                           'use_sim_time': False}], remappings=common_remaps),
         Node(package='tp_b_navigation', executable='global_planner', output='screen',
              parameters=[{'base_frame': base_frame}]),

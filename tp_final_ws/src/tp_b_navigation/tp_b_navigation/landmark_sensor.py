@@ -5,10 +5,8 @@ Emula el detector de cámara/ArUco que NO existe en Gazebo. Para cada landmark c
 (/landmarks, frame map) calcula la observación range/bearing en el frame del robot, y
 publica /observed_landmarks aplicando:
 
-  - FOV del LIDAR (sólo landmarks dentro del rango angular y de distancia del /scan).
-  - Oclusión / línea de visión: se compara el rango esperado al landmark contra lo que
-    mide el LIDAR en ese bearing; si el LIDAR ve algo más cerca (un obstáculo se interpone),
-    el landmark se considera OCLUIDO y no se reporta esa lectura.
+  - FOV frontal y rango de una cámara virtual configurable.
+  - Oclusión / línea de visión conservadora usando el rayo central del LIDAR.
   - Ruido gaussiano en range y bearing (modelo de medición).
 
 Formato de salida (compatible con el consumidor MCL, igual que tp4/tp5):
@@ -33,6 +31,11 @@ import tf2_ros
 from sensor_msgs.msg import LaserScan
 from geometry_msgs.msg import PoseArray, Pose, PointStamped
 from visualization_msgs.msg import Marker, MarkerArray
+
+from tp_b_navigation.landmark_visibility import (
+    camera_point_from_base,
+    visibility_reason,
+)
 
 
 def do_transform_point_2d(point, transform):
@@ -63,7 +66,14 @@ class LandmarkSensor(Node):
         self.declare_parameter('robot_frame', 'base_footprint')
         self.declare_parameter('sigma_range', 0.05)      # σ ruido de distancia [m]
         self.declare_parameter('sigma_bearing', 0.05)    # σ ruido de ángulo [rad]
-        self.declare_parameter('occlusion_tol', 0.2)     # tolerancia línea de visión [m]
+        self.declare_parameter('occlusion_tol', 0.08)
+        self.declare_parameter('camera_frame', '')
+        self.declare_parameter('camera_tx', -0.06)
+        self.declare_parameter('camera_ty', 0.0)
+        self.declare_parameter('camera_yaw', 0.0)
+        self.declare_parameter('camera_fov', 1.05)
+        self.declare_parameter('camera_max_range', 3.0)
+        self.declare_parameter('log_rejections', False)
         self.declare_parameter('publish_markers', True)
         # Frame de pose VERDADERA para emular la cámara. Una cámara real ve los landmarks
         # según la pose real del robot, NO según la estimación del filtro. Usar la estimación
@@ -77,6 +87,14 @@ class LandmarkSensor(Node):
         self.sigma_r = float(self.get_parameter('sigma_range').value)
         self.sigma_b = float(self.get_parameter('sigma_bearing').value)
         self.occ_tol = float(self.get_parameter('occlusion_tol').value)
+        self.camera_frame = str(self.get_parameter('camera_frame').value)
+        self.camera_tx = float(self.get_parameter('camera_tx').value)
+        self.camera_ty = float(self.get_parameter('camera_ty').value)
+        self.camera_yaw = float(self.get_parameter('camera_yaw').value)
+        self.camera_fov = float(self.get_parameter('camera_fov').value)
+        self.camera_max_range = float(
+            self.get_parameter('camera_max_range').value)
+        self.log_rejections = bool(self.get_parameter('log_rejections').value)
         self.publish_markers = bool(self.get_parameter('publish_markers').value)
 
         self.tf_buffer = tf2_ros.Buffer()
@@ -99,7 +117,9 @@ class LandmarkSensor(Node):
         self.map_landmarks = None
         self.get_logger().info(
             f'Sensor virtual de landmarks activo (robot_frame={self.robot_frame}, '
-            f'σ_r={self.sigma_r}, σ_θ={self.sigma_b}).')
+            f'camera_frame={self.camera_frame or "fallback"}, '
+            f'FOV={self.camera_fov:.2f} rad, σ_r={self.sigma_r}, '
+            f'σ_θ={self.sigma_b}).')
 
     def landmarks_callback(self, msg: PoseArray):
         self.map_landmarks = msg
@@ -120,6 +140,8 @@ class LandmarkSensor(Node):
             self.get_logger().warn(f'TF no disponible aún: {e}', throttle_duration_sec=2.0)
             return
 
+        camera_in_base = self._camera_in_base()
+
         obs = PoseArray()
         # Estampar con el tiempo de la TF que REALMENTE usamos (último disponible), no con el
         # stamp del /scan: el LIDAR de Gazebo estampa el scan ~20-60 ms adelante de su propia
@@ -130,7 +152,6 @@ class LandmarkSensor(Node):
         obs.header.frame_id = self.robot_frame
 
         angle_min = msg.angle_min
-        angle_max = msg.angle_max
         r_min = msg.range_min
         r_max = msg.range_max
 
@@ -143,12 +164,23 @@ class LandmarkSensor(Node):
 
             r = math.hypot(lx, ly)
             theta = math.atan2(ly, lx)
-            # El LIDAR del TB3 mide en [0, 2π); llevamos el bearing a ese rango.
-            if theta < 0.0:
-                theta += 2.0 * math.pi
+            camera_point = camera_point_from_base(
+                (lx, ly), *camera_in_base)
 
             pose = Pose()
-            if self._is_visible(msg, theta, r, angle_min, angle_max, r_min, r_max):
+            reason = visibility_reason(
+                base_point=(lx, ly),
+                camera_point=camera_point,
+                ranges=msg.ranges,
+                angle_min=angle_min,
+                angle_increment=msg.angle_increment,
+                range_min=r_min,
+                range_max=r_max,
+                camera_fov=self.camera_fov,
+                camera_max_range=self.camera_max_range,
+                occlusion_tol=self.occ_tol,
+            )
+            if reason == 'visible':
                 pose.position.x = float(r + np.random.normal(0.0, self.sigma_r))
                 pose.position.y = 0.0
                 pose.position.z = float(theta + np.random.normal(0.0, self.sigma_b))
@@ -156,30 +188,39 @@ class LandmarkSensor(Node):
                 pose.position.x = 0.0
                 pose.position.y = 0.0
                 pose.position.z = 0.0
+                if self.log_rejections:
+                    self.get_logger().debug(
+                        f'Landmark rechazado: {reason}, '
+                        f'r={r:.2f}, bearing={theta:.2f}')
             obs.poses.append(pose)
 
         self.pub_obs.publish(obs)
         if self.publish_markers:
             self._publish_markers(obs)
 
-    def _is_visible(self, msg, theta, r, angle_min, angle_max, r_min, r_max):
-        """True si el landmark cae en el FOV y NO está ocluido por un obstáculo."""
-        if not (angle_min <= theta <= angle_max and r_min <= r <= r_max):
-            return False
-
-        # Rayo del LIDAR correspondiente al bearing del landmark (±2 vecinos por robustez).
-        idx = int((theta - angle_min) / msg.angle_increment)
-        idx = int(np.clip(idx, 0, len(msg.ranges) - 1))
-        lo = max(0, idx - 2)
-        hi = min(len(msg.ranges), idx + 3)
-        measured = np.array(msg.ranges[lo:hi], dtype=float)
-        measured = measured[np.isfinite(measured)]
-        if measured.size == 0:
-            return False
-
-        # Visible si el LIDAR midió algo a la distancia esperada del landmark (dentro de
-        # la tolerancia). Si mide claramente más cerca, hay algo interpuesto -> ocluido.
-        return bool(np.min(np.abs(measured - r)) < self.occ_tol)
+    def _camera_in_base(self):
+        """Retorna la extrínseca planar cámara en base, prefiriendo TF real."""
+        if self.camera_frame:
+            try:
+                transform = self.tf_buffer.lookup_transform(
+                    self.robot_frame,
+                    self.camera_frame,
+                    rclpy.time.Time(),
+                )
+                t = transform.transform.translation
+                q = transform.transform.rotation
+                yaw = math.atan2(
+                    2.0 * (q.w * q.z + q.x * q.y),
+                    1.0 - 2.0 * (q.y * q.y + q.z * q.z),
+                )
+                return float(t.x), float(t.y), float(yaw)
+            except Exception as exc:  # noqa: BLE001
+                self.get_logger().warn(
+                    f'Sin TF {self.camera_frame}→{self.robot_frame}; '
+                    f'usando extrínseca fallback: {exc}',
+                    throttle_duration_sec=2.0,
+                )
+        return self.camera_tx, self.camera_ty, self.camera_yaw
 
     def _publish_markers(self, obs: PoseArray):
         ma = MarkerArray()

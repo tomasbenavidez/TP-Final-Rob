@@ -45,6 +45,11 @@ def generate_launch_description():
         default_value='',
         description='Ruta al YAML con K y coeficientes de distorsión (TB4 #0)',
     )
+    odom_topic_arg = DeclareLaunchArgument(
+        'odom_topic',
+        default_value='/tb4_0/odom',
+        description='Odometría física del TurtleBot4 o del rosbag.',
+    )
     kf_dist_arg = DeclareLaunchArgument(
         'kf_dist',
         default_value='0.15',
@@ -154,6 +159,7 @@ def generate_launch_description():
     )
 
     calibration_file = LaunchConfiguration('calibration_file')
+    odom_topic = LaunchConfiguration('odom_topic')
     camera_frame = LaunchConfiguration('camera_frame')
     kf_dist = LaunchConfiguration('kf_dist')
     kf_angle_max = LaunchConfiguration('kf_angle_max')
@@ -221,7 +227,7 @@ def generate_launch_description():
         name='graph_slam_node',
         output='screen',
         parameters=[{
-            'odom_topic': 'tb4_0/odom',
+            'odom_topic': odom_topic,
             'kf_dist': kf_dist,
             'kf_angle_max': kf_angle_max,
             'reobs_min_parallax': reobs_min_parallax,
@@ -258,6 +264,7 @@ def generate_launch_description():
 
     return LaunchDescription([
         calib_arg,
+        odom_topic_arg,
         camera_frame_arg,
         kf_dist_arg,
         kf_angle_max_arg,

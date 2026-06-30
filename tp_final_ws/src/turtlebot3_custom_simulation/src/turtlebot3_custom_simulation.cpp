@@ -76,6 +76,7 @@ void Turtlebot3Fake::init_parameters()
   this->declare_parameter<std::string>("base_frame");
   this->declare_parameter<double>("wheels.separation");
   this->declare_parameter<double>("wheels.radius");
+  this->declare_parameter<bool>("publish_tf");
 
   // Get parameters from yaml
   this->get_parameter_or<std::string>(
@@ -86,6 +87,7 @@ void Turtlebot3Fake::init_parameters()
   this->get_parameter_or<std::string>("base_frame", odom_.child_frame_id, "calc_base_footprint");
   this->get_parameter_or<double>("wheels.separation", wheel_seperation_, 0.0);
   this->get_parameter_or<double>("wheels.radius", wheel_radius_, 0.0);
+  this->get_parameter_or<bool>("publish_tf", publish_tf_, true);
 }
 
 void Turtlebot3Fake::init_variables()
@@ -126,7 +128,7 @@ void Turtlebot3Fake::init_variables()
 ** Callback functions for ROS subscribers
 ********************************************************************************/
 void Turtlebot3Fake::command_velocity_callback(
-  const geometry_msgs::msg::Twist::SharedPtr cmd_vel_msg)
+  const geometry_msgs::msg::Twist::ConstSharedPtr cmd_vel_msg)
 {
   last_cmd_vel_time_ = this->now();
 
@@ -159,11 +161,13 @@ void Turtlebot3Fake::update_callback()
   odom_pub_->publish(odom_);
 
   // tf
-  geometry_msgs::msg::TransformStamped odom_tf;
-  update_tf(odom_tf);
-  tf2_msgs::msg::TFMessage odom_tf_msg;
-  odom_tf_msg.transforms.push_back(odom_tf);
-  tf_pub_->publish(odom_tf_msg);
+  if (publish_tf_) {
+    geometry_msgs::msg::TransformStamped odom_tf;
+    update_tf(odom_tf);
+    tf2_msgs::msg::TFMessage odom_tf_msg;
+    odom_tf_msg.transforms.push_back(odom_tf);
+    tf_pub_->publish(odom_tf_msg);
+  }
 }
 
 bool Turtlebot3Fake::update_odometry(const rclcpp::Duration & duration)

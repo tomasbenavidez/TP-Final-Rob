@@ -22,7 +22,7 @@ ROS 2 Humble). **No se tocó nada de Parte A.**
                                     │               ▲              │
                           /observed_landmarks       │ /plan_request │ /obstacle_detected
                                     ▼               │              ▼
- /odom (Gazebo) ─────────►   mcl_localization ──────┴──────► state_machine ──► /cmd_vel (Gazebo)
+ /calc_odom ─────────────►   mcl_localization ──────┴──────► state_machine ──► /cmd_vel (Gazebo)
                                     │  TF map→odom                 │
                                     └──────────────────────────────┘ usa TF map→base
 ```
@@ -32,7 +32,7 @@ ROS 2 Humble). **No se tocó nada de Parte A.**
 | `map_loader` | `map_loader` | `mapas/map_sim.yaml` | `/map` (`OccupancyGrid`, latched) |
 | `landmark_publisher` | `landmark_publisher` | param `landmarks` | `/landmarks` (`PoseArray`@map, latched), `/landmarks_markers` |
 | `landmark_sensor` | `landmark_sensor` | `/scan`, `/landmarks`, TF | `/observed_landmarks` (`PoseArray`), markers |
-| `mcl_localization` | `mcl_localization` | `/odom`, `/observed_landmarks`, `/initialpose` | `/mcl_pose`, `/particlecloud`, **TF `map→odom`** |
+| `mcl_localization` | `mcl_localization` | `/calc_odom`, `/odom` de referencia, `/observed_landmarks`, `/initialpose` | `/mcl_pose`, `/particlecloud`, **TF `map→odom`** |
 | `global_planner` | `global_planner` | `/map`, `/plan_request`, TF | `/plan` (`Path`), `/plan_status` |
 | `obstacle_monitor` | `obstacle_monitor` | `/scan`, `/map`, TF | `/obstacle_detected` (`Bool`) |
 | `state_machine` | `state_machine` | `/initialpose`, `/goal_pose`, `/plan`, `/obstacle_detected`, TF | `/cmd_vel`, `/nav_state` (`String`), `/plan_request` |
@@ -68,8 +68,8 @@ map ──(mcl_localization)──► odom ──(Gazebo)──► base_footprin
 - Param: `map_yaml` (default instalado en `share/tp_b_navigation/maps/map_sim.yaml`), `frame_id=map`.
 
 ### 3.2 `landmark_publisher` (Sistema 3: landmarks virtuales)
-- Publica **36 landmarks fijos** en `/landmarks` (`PoseArray`@`map`, latched) + markers verdes.
-- **Decisión de densidad:** se pasó de 14 esquinas a **36 puntos** sobre superficies de pared,
+- Publica **60 landmarks fijos** en `/landmarks` (`PoseArray`@`map`, latched) + markers verdes.
+- **Decisión de densidad:** se pasó de 14 esquinas a 36 y luego a **60 puntos** sobre superficies de pared,
   distribuidos por *farthest-point sampling* del mapa (script `scripts/gen_landmarks.py` →
   `config/landmarks.yaml`). La consigna pide *"densidad coherente con el ArUco real"*; además,
   con pocos landmarks el MCL se volvía **multimodal** (ver §4).
@@ -79,9 +79,9 @@ map ──(mcl_localization)──► odom ──(Gazebo)──► base_footprin
 ### 3.3 `landmark_sensor` (cámara virtual con oclusión)
 Emula el detector ArUco que Gazebo no tiene. Por cada landmark conocido:
 1. Lo proyecta al frame del robot y calcula **range + bearing**.
-2. **FOV:** descarta los que caen fuera del rango angular/distancia del `/scan`.
-3. **Oclusión (línea de visión):** compara el range esperado contra lo que mide el LIDAR en ese
-   bearing; si el LIDAR ve algo más cerca (obstáculo interpuesto) → **ocluido**, no se publica.
+2. **FOV de cámara:** descarta los que caen fuera de `1.05 rad` o del rango configurado.
+3. **Oclusión (línea de visión):** compara el range esperado contra el rayo central del LIDAR;
+   si un obstáculo aparece más de `0.08 m` antes → **ocluido**, no se publica.
 4. Agrega **ruido gaussiano** (`sigma_range=0.05`, `sigma_bearing=0.05`).
 - Salida `/observed_landmarks` (`PoseArray`): `position.x=range`, `position.z=bearing`,
   `(0,0,0)` si no visible. Asociación de datos **por índice** (orden = orden de `/landmarks`).
@@ -96,8 +96,10 @@ Emula el detector ArUco que Gazebo no tiene. Por cada landmark conocido:
 
 ### 3.4 `mcl_localization` (filtro de partículas — consigna 1.4)
 MCL con landmarks **conocidos y fijos** (a diferencia de FastSLAM del tp5, acá no se estiman).
-- **Predicción:** por cada `/odom`, modelo de movimiento por odometría (δrot1, δtrans, δrot2 con
+- **Predicción:** por cada `/calc_odom`, modelo de movimiento por odometría (δrot1, δtrans, δrot2 con
   ruido `alpha1..4`, Thrun cap. 5).
+- `/odom` de Gazebo se conserva separadamente como referencia para construir `map→odom`;
+  no alimenta el modelo de movimiento.
 - **Corrección:** por cada `/observed_landmarks` visible, verosimilitud gaussiana range/bearing
   contra el landmark conocido `i` (log-pesos, normalización estable, diferencia angular con
   wraparound). Sólo corrige si hubo movimiento (`update_min_d/ a`).
@@ -159,7 +161,7 @@ El MCL **divergía** al navegar. Tres correcciones, cada una verificada con dato
    del MCL → realimentación → al derivar un poco, los landmarks "dejaban de verse" y el filtro
    quedaba en dead-reckoning → divergencia sin retorno (estimación a >2 m). Fix: proyectar con la
    pose verdadera (`odom`).
-2. **Densidad 14 → 36 landmarks** (§3.2). Con 14 el posterior era **multimodal** (simetrías de la
+2. **Densidad 14 → 36 → 60 landmarks** (§3.2). Con 14 el posterior era **multimodal** (simetrías de la
    casa) y la media pesada saltaba metros entre modos. Con 36 el problema desaparece.
 3. **Roughening + 350 partículas** (§3.4). Al converger muy ajustado la nube colapsaba y perdía el
    lock ante una discrepancia transitoria. El jitter post-resampling mantiene diversidad → ahora
@@ -179,7 +181,7 @@ tp_b_navigation/
 │   ├── mcl_localization.py     global_planner.py       obstacle_monitor.py
 │   ├── state_machine.py        utils.py
 ├── config/
-│   ├── landmarks.yaml          (36 landmarks)
+│   ├── landmarks.yaml          (60 landmarks)
 │   └── parte_b.rviz            (config de RViz de Parte B)
 ├── launch/
 │   ├── parte_b.launch.py             (pila completa: nav + RViz)

@@ -35,10 +35,18 @@ def generate_launch_description():
     use_sim_time = LaunchConfiguration('use_sim_time')
     launch_rviz = LaunchConfiguration('launch_rviz')
     rviz_config = LaunchConfiguration('rviz_config')
+    odom_topic = LaunchConfiguration('odom_topic')
+    truth_odom_topic = LaunchConfiguration('truth_odom_topic')
+    truth_odom_frame = LaunchConfiguration('truth_odom_frame')
+    camera_frame = LaunchConfiguration('camera_frame')
 
     args = [
         DeclareLaunchArgument('map_yaml', default_value=default_map),
         DeclareLaunchArgument('robot_frame', default_value='base_footprint'),
+        DeclareLaunchArgument('odom_topic', default_value='/calc_odom'),
+        DeclareLaunchArgument('truth_odom_topic', default_value='/odom'),
+        DeclareLaunchArgument('truth_odom_frame', default_value='odom'),
+        DeclareLaunchArgument('camera_frame', default_value=''),
         DeclareLaunchArgument('use_sim_time', default_value='true'),
         DeclareLaunchArgument('launch_rviz', default_value='true'),
         DeclareLaunchArgument('rviz_config', default_value=default_rviz_config),
@@ -58,12 +66,20 @@ def generate_launch_description():
     landmark_sensor = Node(
         package='tp_b_navigation', executable='landmark_sensor',
         name='landmark_sensor', output='screen',
-        parameters=[{'robot_frame': robot_frame}, common])
+        parameters=[{
+            'robot_frame': robot_frame,
+            'truth_frame': truth_odom_frame,
+            'camera_frame': camera_frame,
+        }, common])
 
     mcl = Node(
         package='tp_b_navigation', executable='mcl_localization',
         name='mcl_localization', output='screen',
-        parameters=[{'base_frame': robot_frame}, common])
+        parameters=[{
+            'base_frame': robot_frame,
+            'motion_odom_topic': odom_topic,
+            'reference_odom_topic': truth_odom_topic,
+        }, common])
 
     planner = Node(
         package='tp_b_navigation', executable='global_planner',

@@ -26,7 +26,6 @@
 #include "nav_msgs/msg/odometry.hpp"
 #include "sensor_msgs/msg/joint_state.hpp"
 #include "tf2_msgs/msg/tf_message.hpp"
-#include "turtlebot3_msgs/msg/sensor_state.hpp"
 
 #define LEFT 0
 #define RIGHT 1
@@ -68,11 +67,12 @@ private:
 
   double wheel_seperation_;
   double wheel_radius_;
+  bool publish_tf_;
 
   // Function prototypes
   void init_parameters();
   void init_variables();
-  void command_velocity_callback(const geometry_msgs::msg::Twist::SharedPtr cmd_vel_msg);
+  void command_velocity_callback(const geometry_msgs::msg::Twist::ConstSharedPtr cmd_vel_msg);
   void update_callback();
   bool update_odometry(const rclcpp::Duration & diff_time);
   void update_joint_state();
