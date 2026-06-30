@@ -7,6 +7,17 @@ PACKAGE_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PACKAGE_ROOT))
 
 
+class AmbiguousCovariance:
+    def __init__(self, values):
+        self.values = values
+
+    def __iter__(self):
+        return iter(self.values)
+
+    def __bool__(self):
+        raise ValueError('ambiguous truth value')
+
+
 def test_fresh_low_covariance_pose_allows_safety_gate():
     from tp_b_navigation.safety_gates import SafetyGateConfig, localization_gate
 
@@ -14,6 +25,33 @@ def test_fresh_low_covariance_pose_allows_safety_gate():
         now_s=10.0,
         last_pose_stamp_s=9.5,
         covariance=[0.01, 0.02, 0.03],
+        config=SafetyGateConfig(
+            enabled=True,
+            max_mcl_pose_age=1.0,
+            max_position_covariance=0.25,
+            max_yaw_covariance=0.5,
+        ),
+    )
+
+    assert reason is None
+
+
+def test_ambiguous_truth_value_covariance_pose_allows_safety_gate():
+    from tp_b_navigation.safety_gates import SafetyGateConfig, localization_gate
+
+    covariance = AmbiguousCovariance(
+        [0.01, 0.0, 0.0, 0.0, 0.0, 0.0,
+         0.0, 0.02, 0.0, 0.0, 0.0, 0.0,
+         0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+         0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+         0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+         0.0, 0.0, 0.0, 0.0, 0.0, 0.03]
+    )
+
+    reason = localization_gate(
+        now_s=10.0,
+        last_pose_stamp_s=9.5,
+        covariance=covariance,
         config=SafetyGateConfig(
             enabled=True,
             max_mcl_pose_age=1.0,

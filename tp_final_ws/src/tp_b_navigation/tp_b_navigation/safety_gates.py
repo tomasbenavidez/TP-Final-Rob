@@ -17,7 +17,7 @@ def _finite_nonnegative(value):
 
 
 def _covariance_values(covariance):
-    values = list(covariance or [])
+    values = [] if covariance is None else list(covariance)
     if len(values) >= 36:
         return values[0], values[7], values[35]
     if len(values) >= 3:
