@@ -22,22 +22,35 @@ class SimulationContractsTest(unittest.TestCase):
         self.assertEqual(len(set(points)), 60)
 
     def test_part_b_defaults_to_calculated_odom_and_ground_truth_sensor(self):
+        from tp_b_navigation.platform_profiles import resolve_profile
+
+        profile = resolve_profile('simulation_tb3')
         source = (PACKAGE_ROOT / 'launch' / 'parte_b.launch.py').read_text()
-        self.assertIn("DeclareLaunchArgument('odom_topic', default_value='/calc_odom')",
-                      source)
         self.assertIn(
-            "DeclareLaunchArgument('truth_odom_topic', default_value='/odom')",
+            "DeclareLaunchArgument('profile', default_value='simulation_tb3'",
             source)
+        self.assertEqual(profile.odom_topic, '/calc_odom')
+        self.assertEqual(profile.reference_odom_topic, '/odom')
+        self.assertEqual(profile.base_frame, 'base_footprint')
+        self.assertTrue(profile.launch_virtual_landmarks)
+        self.assertIn("DeclareLaunchArgument('base_frame'", source)
+        self.assertIn("DeclareLaunchArgument('reference_odom_topic'", source)
         self.assertIn("'motion_odom_topic': odom_topic", source)
         self.assertIn("'truth_frame': truth_odom_frame", source)
+        self.assertIn("profile.launch_virtual_landmarks", source)
 
     def test_c_real_keeps_tb4_odometry_default(self):
+        from tp_b_navigation.platform_profiles import resolve_profile
+
+        profile = resolve_profile('real_tb4')
         source = (
             REPO_ROOT / 'tp_final_ws' / 'src' / 'tp_c_mission' / 'launch'
             / 'parte_c_real.launch.py').read_text()
         self.assertIn(
-            "DeclareLaunchArgument('odom_topic', default_value='/tb4_0/odom')",
+            "DeclareLaunchArgument('profile', default_value='real_tb4'",
             source)
+        self.assertEqual(profile.odom_topic, '/tb4_0/odom')
+        self.assertEqual(profile.reference_odom_topic, '/tb4_0/odom')
 
     def test_part_a_exposes_tb4_odometry_default(self):
         launch_dir = (

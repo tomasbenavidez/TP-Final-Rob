@@ -41,6 +41,8 @@ class ParteCContractsTest(unittest.TestCase):
 
     def test_real_profile_uses_identified_aruco_and_not_virtual_sensor(self):
         source = (PACKAGE_ROOT / 'launch' / 'parte_c_real.launch.py').read_text()
+        self.assertIn("DeclareLaunchArgument('profile', default_value='real_tb4'",
+                      source)
         self.assertIn('aruco_mcl_adapter', source)
         self.assertIn('landmark_map_file', source)
         self.assertNotIn("executable='landmark_sensor'", source)
