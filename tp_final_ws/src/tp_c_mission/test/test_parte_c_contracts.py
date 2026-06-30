@@ -58,6 +58,31 @@ class ParteCContractsTest(unittest.TestCase):
         self.assertIn('landmark_map_file', source)
         self.assertNotIn("executable='landmark_sensor'", source)
 
+    def test_real_profile_routes_namespaced_tf_to_all_tf_consumers(self):
+        source = (PACKAGE_ROOT / 'launch' / 'parte_c_real.launch.py').read_text()
+
+        self.assertIn("tf_topic = _override(context, 'tf_topic', profile.tf_topic)", source)
+        self.assertIn(
+            "tf_static_topic = _override(\n"
+            "        context, 'tf_static_topic', profile.tf_static_topic)",
+            source)
+        self.assertIn("('/tf', tf_topic)", source)
+        self.assertIn("('/tf_static', tf_static_topic)", source)
+        for argument in ('tf_topic', 'tf_static_topic'):
+            self.assertIn(f"DeclareLaunchArgument('{argument}'", source)
+
+        for executable in (
+            'mcl_localization',
+            'global_planner',
+            'obstacle_monitor',
+            'state_machine',
+            'aruco_mcl_adapter',
+            'red_cone_detector',
+        ):
+            start = source.index(f"executable='{executable}'")
+            end = source.find('),', start) + 2
+            self.assertIn('remappings=', source[start:end], executable)
+
     def test_real_profile_wires_mission_safety_gates(self):
         launch = (PACKAGE_ROOT / 'launch' / 'parte_c_real.launch.py').read_text()
         manager = (PACKAGE_ROOT / 'tp_c_mission' / 'mission_manager_node.py').read_text()

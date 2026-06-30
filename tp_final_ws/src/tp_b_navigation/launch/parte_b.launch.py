@@ -73,6 +73,9 @@ def _launch_nodes(context, pkg_share, landmarks_yaml):
     scan_topic = _override(context, 'scan_topic', profile.scan_topic)
     cmd_vel_topic = _override(context, 'cmd_vel_topic', profile.cmd_vel_topic)
     rgb_topic = _override(context, 'rgb_topic', profile.rgb_topic)
+    tf_topic = _override(context, 'tf_topic', profile.tf_topic)
+    tf_static_topic = _override(
+        context, 'tf_static_topic', profile.tf_static_topic)
     camera_frame = _override(context, 'camera_frame', profile.camera_frame)
     use_sim_time = _bool_override(context, 'use_sim_time', profile.use_sim_time)
     landmark_map_file = _arg(context, 'landmark_map_file')
@@ -94,6 +97,8 @@ def _launch_nodes(context, pkg_share, landmarks_yaml):
             scan_topic=scan_topic,
             cmd_vel_topic=cmd_vel_topic,
             rgb_topic=rgb_topic,
+            tf_topic=tf_topic,
+            tf_static_topic=tf_static_topic,
         )
 
     write_resolved_platform(
@@ -105,6 +110,8 @@ def _launch_nodes(context, pkg_share, landmarks_yaml):
             'scan_topic': scan_topic,
             'cmd_vel_topic': cmd_vel_topic,
             'rgb_topic': rgb_topic,
+            'tf_topic': tf_topic,
+            'tf_static_topic': tf_static_topic,
         },
         frames={
             'base_frame': robot_frame,
@@ -130,10 +137,15 @@ def _launch_nodes(context, pkg_share, landmarks_yaml):
         **monitor_safety_params,
         'max_monitor_age': max_monitor_age,
     }
+    tf_remaps = [
+        ('/tf', tf_topic),
+        ('/tf_static', tf_static_topic),
+    ]
     common_remaps = [
         ('/odom', odom_topic),
         ('/scan', scan_topic),
         ('/cmd_vel', cmd_vel_topic),
+        *tf_remaps,
     ]
 
     map_loader = Node(
@@ -171,7 +183,8 @@ def _launch_nodes(context, pkg_share, landmarks_yaml):
     planner = Node(
         package='tp_b_navigation', executable='global_planner',
         name='global_planner', output='screen',
-        parameters=[{'base_frame': robot_frame}, common])
+        parameters=[{'base_frame': robot_frame}, common],
+        remappings=tf_remaps)
 
     monitor = Node(
         package='tp_b_navigation', executable='obstacle_monitor',
@@ -198,7 +211,8 @@ def _launch_nodes(context, pkg_share, landmarks_yaml):
             Node(
                 package='tp_b_navigation', executable='aruco_mcl_adapter',
                 name='aruco_mcl_adapter', output='screen',
-                parameters=[{'base_frame': robot_frame}, common]),
+                parameters=[{'base_frame': robot_frame}, common],
+                remappings=tf_remaps),
         ]
 
     warnings = []
@@ -216,6 +230,7 @@ def _launch_nodes(context, pkg_share, landmarks_yaml):
         package='rviz2', executable='rviz2', name='rviz2',
         arguments=['-d', rviz_config],
         parameters=[common],
+        remappings=tf_remaps,
         condition=IfCondition(launch_rviz), output='screen')
 
     return [
@@ -255,6 +270,8 @@ def generate_launch_description():
         DeclareLaunchArgument('scan_topic', default_value=_UNSET),
         DeclareLaunchArgument('cmd_vel_topic', default_value=_UNSET),
         DeclareLaunchArgument('rgb_topic', default_value=_UNSET),
+        DeclareLaunchArgument('tf_topic', default_value=_UNSET),
+        DeclareLaunchArgument('tf_static_topic', default_value=_UNSET),
         DeclareLaunchArgument('camera_frame', default_value=_UNSET),
         DeclareLaunchArgument('landmark_map_file', default_value='',
                               description='JSON de trayectoria+landmarks producido por Parte A.'),

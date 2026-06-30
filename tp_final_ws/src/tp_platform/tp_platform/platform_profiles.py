@@ -110,6 +110,8 @@ _PROFILES = {
         use_sim_time=True,
         landmark_source='virtual',
         launch_virtual_landmarks=True,
+        tf_topic='/tf',
+        tf_static_topic='/tf_static',
     ),
     BAG_TB4: PlatformProfile(
         profile=BAG_TB4,

@@ -45,6 +45,9 @@ def _launch_nodes(context, mission_share, config):
     rgb = _override(context, 'rgb_topic', profile.rgb_topic)
     depth = _override(context, 'depth_topic', profile.depth_topic)
     info = _override(context, 'camera_info_topic', profile.camera_info_topic)
+    tf_topic = _override(context, 'tf_topic', profile.tf_topic)
+    tf_static_topic = _override(
+        context, 'tf_static_topic', profile.tf_static_topic)
     base_frame = _override(context, 'base_frame', profile.base_frame)
     odom_frame = _override(context, 'odom_frame', profile.odom_frame)
     localization_safety_params = {
@@ -69,6 +72,8 @@ def _launch_nodes(context, mission_share, config):
         rgb_topic=rgb,
         depth_topic=depth,
         camera_info_topic=info,
+        tf_topic=tf_topic,
+        tf_static_topic=tf_static_topic,
     )
     write_resolved_platform(
         _arg(context, 'artifact_dir') or '/tmp/tp_final_rob',
@@ -80,6 +85,8 @@ def _launch_nodes(context, mission_share, config):
             'rgb_topic': rgb,
             'depth_topic': depth,
             'camera_info_topic': info,
+            'tf_topic': tf_topic,
+            'tf_static_topic': tf_static_topic,
         },
         frames={'base_frame': base_frame, 'odom_frame': odom_frame},
         artifacts={
@@ -88,9 +95,16 @@ def _launch_nodes(context, mission_share, config):
         },
     )
 
-    common_remaps = [('/odom', odom_topic),
-                     ('/scan', scan_topic),
-                     ('/cmd_vel', cmd_vel_topic)]
+    tf_remaps = [
+        ('/tf', tf_topic),
+        ('/tf_static', tf_static_topic),
+    ]
+    common_remaps = [
+        ('/odom', odom_topic),
+        ('/scan', scan_topic),
+        ('/cmd_vel', cmd_vel_topic),
+        *tf_remaps,
+    ]
     return [
         Node(package='tp_b_navigation', executable='map_loader', output='screen',
              parameters=[{'map_yaml': map_yaml, 'use_sim_time': use_sim_time}]),
@@ -102,7 +116,8 @@ def _launch_nodes(context, mission_share, config):
                           'use_sim_time': use_sim_time}], remappings=common_remaps),
         Node(package='tp_b_navigation', executable='global_planner', output='screen',
              parameters=[{'base_frame': base_frame,
-                          'use_sim_time': use_sim_time}]),
+                          'use_sim_time': use_sim_time}],
+             remappings=tf_remaps),
         Node(package='tp_b_navigation', executable='obstacle_monitor', output='screen',
              parameters=[{'base_frame': base_frame,
                           'use_sim_time': use_sim_time}, monitor_safety_params],
@@ -117,11 +132,13 @@ def _launch_nodes(context, mission_share, config):
                           'use_sim_time': use_sim_time}]),
         Node(package='tp_b_navigation', executable='aruco_mcl_adapter', output='screen',
              parameters=[{'base_frame': base_frame,
-                          'use_sim_time': use_sim_time}]),
+                          'use_sim_time': use_sim_time}],
+             remappings=tf_remaps),
         Node(package='tp_c_mission', executable='red_cone_detector', output='screen',
              parameters=[config, {'rgb_topic': rgb, 'depth_topic': depth,
                                   'camera_info_topic': info,
-                                  'use_sim_time': use_sim_time}]),
+                                  'use_sim_time': use_sim_time}],
+             remappings=tf_remaps),
         Node(package='tp_c_mission', executable='mission_manager', output='screen',
              parameters=[config, {'landmark_map_file': landmark_map,
                                   'use_sim_time': use_sim_time},
@@ -143,6 +160,8 @@ def generate_launch_description():
         DeclareLaunchArgument('odom_topic', default_value=_UNSET),
         DeclareLaunchArgument('scan_topic', default_value=_UNSET),
         DeclareLaunchArgument('cmd_vel_topic', default_value=_UNSET),
+        DeclareLaunchArgument('tf_topic', default_value=_UNSET),
+        DeclareLaunchArgument('tf_static_topic', default_value=_UNSET),
         DeclareLaunchArgument('base_frame', default_value=_UNSET),
         DeclareLaunchArgument('odom_frame', default_value=_UNSET),
         DeclareLaunchArgument('enable_safety_gates', default_value='true'),

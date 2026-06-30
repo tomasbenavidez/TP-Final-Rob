@@ -50,6 +50,28 @@ class SimulationContractsTest(unittest.TestCase):
         self.assertIn('landmark_source=aruco', source)
         self.assertNotIn("profile.landmark_source == 'aruco' and profile.launch_virtual_landmarks", source)
 
+    def test_part_b_routes_selected_tf_topics_to_tf_consumers(self):
+        source = (PACKAGE_ROOT / 'launch' / 'parte_b.launch.py').read_text()
+
+        self.assertIn("tf_topic = _override(context, 'tf_topic', profile.tf_topic)", source)
+        self.assertIn(
+            "tf_static_topic = _override(\n"
+            "        context, 'tf_static_topic', profile.tf_static_topic)",
+            source)
+        self.assertIn("('/tf', tf_topic)", source)
+        self.assertIn("('/tf_static', tf_static_topic)", source)
+        for argument in ('tf_topic', 'tf_static_topic'):
+            self.assertIn(f"DeclareLaunchArgument('{argument}'", source)
+
+        for node_name in ('mcl', 'planner', 'monitor', 'sm', 'rviz'):
+            assignment = source.index(f'{node_name} = Node(')
+            block = source[assignment:source.find('\n\n', assignment)]
+            self.assertIn('remappings=', block, node_name)
+
+        adapter = source.index("executable='aruco_mcl_adapter'")
+        adapter_block = source[adapter:source.find('),', adapter) + 2]
+        self.assertIn('remappings=tf_remaps', adapter_block)
+
     def test_part_b_exposes_real_safety_gate_parameters(self):
         source = (PACKAGE_ROOT / 'launch' / 'parte_b.launch.py').read_text()
 
