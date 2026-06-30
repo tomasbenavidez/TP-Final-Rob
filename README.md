@@ -18,8 +18,8 @@ está en [Parte A](docs/parte_a/tb4-map-comparison.md) y
 ## 1. Preparar la notebook
 
 Requisitos: notebook Ubuntu del laboratorio con ROS 2 Humble instalado en
-`/opt/ros/humble`, `colcon`, GTSAM, OpenCV contrib, SciPy, acceso SSH al TB4 y
-el paquete de teleoperación:
+`/opt/ros/humble`, `colcon`, GTSAM, OpenCV contrib, SciPy y el paquete de
+teleoperación:
 
 ```bash
 sudo apt install ros-humble-teleop-twist-keyboard
@@ -35,7 +35,6 @@ export ROBOT_NAME=tb4_0
 export REPO_ROOT="$(git rev-parse --show-toplevel)"
 export WS_ROOT="${REPO_ROOT}/tp_final_ws"
 export ROBOT_NS="/${ROBOT_NAME}"
-export TB4_SSH_HOST="${ROBOT_NAME}"
 export RUN_ID="$(date +%Y%m%d-%H%M)-${ROBOT_NAME}"
 export RUN_ROOT="${HOME}/tb4_laboratorio_runs/${RUN_ID}"
 export BAG_DIR="${RUN_ROOT}/acquisition/laberinto"
@@ -62,7 +61,6 @@ export ROBOT_NAME="${ROBOT_NAME}"
 export REPO_ROOT="${REPO_ROOT}"
 export WS_ROOT="${WS_ROOT}"
 export ROBOT_NS="${ROBOT_NS}"
-export TB4_SSH_HOST="${TB4_SSH_HOST}"
 export RUN_ID="${RUN_ID}"
 export RUN_ROOT="${RUN_ROOT}"
 export BAG_DIR="${BAG_DIR}"
@@ -146,28 +144,27 @@ ros2 topic echo --once "${DEPTH_TOPIC}" sensor_msgs/msg/Image \
 Si no aparece ningún tópico de depth, continuar con Parte A/B pero no iniciar
 Parte C real: `vision_ready` debe quedar en `false` hasta tener RGB-D alineado.
 
-## 3. Grabar el bag en el TB4
+## 3. Grabar el bag desde la notebook
 
-El bag se graba onboard para no depender del transporte de RGB por Wi-Fi. El
-siguiente comando crea la carpeta remota y comienza a grabar. Mantener esta
-terminal abierta durante el recorrido.
+El bag se graba localmente en la notebook, usando los tópicos ROS que ya se ven
+desde esa terminal. No hace falta SSH al robot. Mantener esta terminal abierta
+durante el recorrido.
 
 ```bash
 # [Notebook — Terminal de grabación]
 source /tmp/tb4_lab_env.sh
 
-ssh "${TB4_SSH_HOST}" \
-  "mkdir -p tb4_laboratorio_runs/${RUN_ID}/acquisition"
+mkdir -p "${BAG_DIR}"
 
-ssh -t "${TB4_SSH_HOST}" "bash -lc 'source /opt/ros/humble/setup.bash && ros2 bag record \
-  ${ODOM_TOPIC} \
-  ${SCAN_TOPIC} \
-  ${RGB_TOPIC} \
-  ${CAMERA_INFO_TOPIC} \
-  ${TF_TOPIC} \
-  ${TF_STATIC_TOPIC} \
-  ${ROBOT_NS}/imu \
-  -o tb4_laboratorio_runs/${RUN_ID}/acquisition/laberinto'"
+ros2 bag record \
+  "${ODOM_TOPIC}" \
+  "${SCAN_TOPIC}" \
+  "${RGB_TOPIC}" \
+  "${CAMERA_INFO_TOPIC}" \
+  "${TF_TOPIC}" \
+  "${TF_STATIC_TOPIC}" \
+  "${ROBOT_NS}/imu" \
+  -o "${BAG_DIR}"
 ```
 
 En otra terminal de la notebook, teleoperar a velocidad reducida. El remap es
@@ -188,17 +185,10 @@ varios ángulos. Detener físicamente el robot y recién entonces presionar
 `metadata.yaml`.
 
 ```bash
-# [Notebook — validar y copiar el bag]
+# [Notebook — validar el bag local]
 source /tmp/tb4_lab_env.sh
 
-ssh "${TB4_SSH_HOST}" \
-  "test -s tb4_laboratorio_runs/${RUN_ID}/acquisition/laberinto/metadata.yaml"
-
-mkdir -p "${BAG_DIR}"
-rsync -av --progress \
-  "${TB4_SSH_HOST}:tb4_laboratorio_runs/${RUN_ID}/acquisition/laberinto/" \
-  "${BAG_DIR}/"
-
+test -s "${BAG_DIR}/metadata.yaml"
 ros2 bag info "${BAG_DIR}" | tee "${RUN_ROOT}/config/bag-info.txt"
 ros2 run tp_a_slam_aruco check_bag_contract "${BAG_DIR}" \
   --robot-namespace "${ROBOT_NAME}"
