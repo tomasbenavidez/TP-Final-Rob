@@ -69,6 +69,65 @@ class InformationExplorationTest(unittest.TestCase):
         )
         self.assertTrue(all(not blocked[cell] for cell in path))
 
+    def test_cone_approach_rejects_pose_that_sees_through_wall(self):
+        blocked = np.zeros((5, 7), dtype=bool)
+        blocked[0, :] = blocked[4, :] = True
+        blocked[:, 0] = blocked[:, 6] = True
+        blocked[1:4, 3] = True
+        blocked[2, 4] = False
+        core = GridPlannerCore.from_blocked(
+            blocked, 1.0, 0.0, 0.0, robot_radius=0.0,
+            clearance_weight=0.0, clearance_max=0.0,
+        )
+
+        result = select_approach_pose(
+            core, robot_xy=(1.5, 2.5), cone_xy=(4.5, 2.5),
+            standoff=1.0, samples=4,
+        )
+
+        self.assertIsNone(result)
+
+    def test_cone_approach_requires_reachable_astar_path(self):
+        blocked = np.zeros((5, 8), dtype=bool)
+        blocked[0, :] = blocked[4, :] = True
+        blocked[:, 0] = blocked[:, 7] = True
+        blocked[1:4, 3] = True
+        core = GridPlannerCore.from_blocked(
+            blocked, 1.0, 0.0, 0.0, robot_radius=0.0,
+            clearance_weight=0.0, clearance_max=0.0,
+        )
+
+        result = select_approach_pose(
+            core, robot_xy=(1.5, 2.5), cone_xy=(5.5, 2.5),
+            standoff=1.0, samples=8,
+        )
+
+        self.assertIsNone(result)
+
+    def test_cone_approach_preserves_safe_standoff_distance(self):
+        blocked = np.zeros((7, 7), dtype=bool)
+        blocked[0, :] = blocked[6, :] = True
+        blocked[:, 0] = blocked[:, 6] = True
+        core = GridPlannerCore.from_blocked(
+            blocked, 1.0, 0.0, 0.0, robot_radius=0.0,
+            clearance_weight=0.0, clearance_max=0.0,
+        )
+        cone_xy = (3.5, 3.5)
+        standoff = 1.0
+
+        result = select_approach_pose(
+            core, robot_xy=(1.5, 3.5), cone_xy=cone_xy,
+            standoff=standoff, samples=16,
+        )
+
+        self.assertIsNotNone(result)
+        pose, _path = result
+        self.assertAlmostEqual(
+            math.hypot(pose[0] - cone_xy[0], pose[1] - cone_xy[1]),
+            standoff,
+            places=6,
+        )
+
     def test_frontier_cells_track_boundary_between_seen_and_unseen_space(self):
         blocked = np.ones((5, 5), dtype=bool)
         blocked[1:4, 1:4] = False

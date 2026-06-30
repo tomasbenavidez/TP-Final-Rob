@@ -18,6 +18,7 @@ from visualization_msgs.msg import Marker, MarkerArray
 from tp_b_navigation.planner_core import GridPlannerCore
 from tp_b_navigation.dynamic_obstacles import apply_dynamic_obstacles
 from tp_b_navigation.landmark_io import load_landmark_map
+from tp_b_navigation.safety_gates import SafetyGateConfig, localization_gate
 from tp_b_navigation.utils import quaternion_from_yaw
 from tp_c_mission.information_exploration import (
     CandidateAction, CoverageBelief, InformationPolicy,
@@ -39,6 +40,10 @@ class MissionManager(Node):
             'landmark_map_file': '',
             'vision_timeout': 3.0,
             'min_goal_new_cells': 8,
+            'enable_safety_gates': False,
+            'max_mcl_pose_age': 1.0,
+            'max_position_covariance': 0.25,
+            'max_yaw_covariance': 0.5,
         }
         for name, value in defaults.items():
             self.declare_parameter(name, value)
@@ -61,6 +66,12 @@ class MissionManager(Node):
         self.auto_start = bool(get('auto_start'))
         self.vision_timeout = float(get('vision_timeout'))
         self.min_goal_new_cells = int(get('min_goal_new_cells'))
+        self.safety_config = SafetyGateConfig(
+            enabled=bool(get('enable_safety_gates')),
+            max_mcl_pose_age=float(get('max_mcl_pose_age')),
+            max_position_covariance=float(get('max_position_covariance')),
+            max_yaw_covariance=float(get('max_yaw_covariance')),
+        )
 
         self.policy = InformationPolicy()
         self.planner = None
@@ -89,6 +100,8 @@ class MissionManager(Node):
         self.pending_goal_evaluation = None
         self.started_at = None
         self.last_vision_at = None
+        self.last_mcl_pose_stamp = None
+        self.last_mcl_covariance = None
         self.status = 'IDLE'
         self.last_frontier_debug = []
         self.last_selected_action = None
@@ -187,6 +200,8 @@ class MissionManager(Node):
                          1.0 - 2.0 * (q.y * q.y + q.z * q.z))
         self.pose = (pose.position.x, pose.position.y, yaw)
         cov = msg.pose.covariance
+        self.last_mcl_pose_stamp = self._stamp_to_seconds(msg.header.stamp)
+        self.last_mcl_covariance = cov
         planar_trace = max(0.0, cov[0] + cov[7] + cov[35])
         self.covariance_scale = max(0.5, min(3.0, planar_trace / 0.10))
 
@@ -199,9 +214,12 @@ class MissionManager(Node):
             self.last_vision_at = self.get_clock().now()
 
     def start_cb(self, _request, response):
-        if self.planner is None or self.pose is None or not self._vision_is_fresh():
+        block_reason = self._start_block_reason()
+        if block_reason is not None:
             response.success = False
             response.message = 'Faltan /map, /mcl_pose o cámara/TF disponible.'
+            if block_reason not in ('map_missing', 'pose_missing', 'vision_stale'):
+                response.message += f' Safety gate: {block_reason}.'
             return response
         self.active = True
         self.approaching = False
@@ -271,19 +289,18 @@ class MissionManager(Node):
     def loop(self):
         ready_to_autostart = (
             self.auto_start and not self.active and self.status == 'IDLE'
-            and self.planner is not None and self.pose is not None)
+            and self._start_block_reason() is None)
         if ready_to_autostart:
             request, response = Trigger.Request(), Trigger.Response()
             self.start_cb(request, response)
         if not self.active or self.planner is None or self.pose is None:
             return
+        reason = self._localization_block_reason()
+        if reason is not None:
+            self._fail_mission(reason)
+            return
         if not self._vision_is_fresh():
-            self.cancel_pub.publish(Empty())
-            self.active = False
-            self.current_goal = None
-            self.last_selected_action = None
-            self._set_status('FAILED')
-            self.get_logger().error('Misión detenida: cámara o TF sin datos recientes.')
+            self._fail_mission('vision_stale')
             return
         if self.started_at is not None:
             elapsed = (self.get_clock().now() - self.started_at).nanoseconds * 1e-9
@@ -377,9 +394,42 @@ class MissionManager(Node):
         self._set_status('NOT_FOUND')
         self.get_logger().warn(f'Misión terminada sin cono: {reason}.')
 
+    def _fail_mission(self, reason):
+        self.cancel_pub.publish(Empty())
+        self.active = False
+        self.current_goal = None
+        self.approaching = False
+        self.last_selected_action = None
+        self._set_status('FAILED')
+        self.get_logger().error(f'Misión detenida por safety gate: {reason}.')
+
     def _set_status(self, status):
         self.status = status
         self.status_pub.publish(String(data=status))
+
+    def _now(self):
+        return self.get_clock().now().nanoseconds * 1e-9
+
+    @staticmethod
+    def _stamp_to_seconds(stamp):
+        return float(stamp.sec) + float(stamp.nanosec) * 1e-9
+
+    def _localization_block_reason(self):
+        return localization_gate(
+            now_s=self._now(),
+            last_pose_stamp_s=self.last_mcl_pose_stamp,
+            covariance=self.last_mcl_covariance,
+            config=self.safety_config,
+        )
+
+    def _start_block_reason(self):
+        if self.planner is None:
+            return 'map_missing'
+        if self.pose is None:
+            return 'pose_missing'
+        if not self._vision_is_fresh():
+            return 'vision_stale'
+        return self._localization_block_reason()
 
     def _vision_is_fresh(self):
         if self.last_vision_at is None:

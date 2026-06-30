@@ -49,12 +49,14 @@ frontiers candidatos y la pose confirmada del cono.
 
 ```bash
 ros2 launch tp_c_mission parte_c_bag.launch.py \
+  robot_namespace:=tb4_0 \
   bag_path:=tp_final_ws/bags/laberinto_conos
 ```
 
 Los umbrales iniciales están en `config/parte_c.yaml`; deben calibrarse contra el bag sin convertirlos en constantes del código.
-El perfil de bag reproduce `bag_path` con `--clock` y abre por defecto RViz en `odom`, con TF, LIDAR (`/tb4_0/scan`),
-odometría con traza (`/tb4_0/odom`), pose confirmada del cono, imagen debug y máscara.
+El perfil de bag reproduce `bag_path` con `--clock` y deriva los tópicos TB4
+desde `robot_namespace` (`tb4_0` o `tb4_1`). RViz abre en `odom`, con TF,
+LIDAR, odometría con traza, pose confirmada del cono, imagen debug y máscara.
 El mapa (`/map`) y el plan (`/plan`) quedan cargados pero desactivados, porque un rosbag
 de visión puro puede no traer navegación activa.
 
@@ -62,6 +64,7 @@ Para correr sólo los nodos de percepción, sin GUI:
 
 ```bash
 ros2 launch tp_c_mission parte_c_bag.launch.py \
+  robot_namespace:=tb4_0 \
   bag_path:=tp_final_ws/bags/laberinto_conos launch_rviz:=false
 ```
 
@@ -76,16 +79,33 @@ Luego:
 
 ```bash
 ros2 launch tp_c_mission parte_c_real.launch.py \
+  robot_namespace:=tb4_0 \
   map_yaml:=/tmp/mapa.yaml \
   landmark_map_file:=/tmp/trayectoria.json \
-  depth_topic:=/oakd/depth/aligned/image_raw
+  depth_topic:=/oakd/depth/aligned/image_raw \
+  enable_safety_gates:=true
 ```
 
-El perfil real no inicia `landmark_sensor`. `aruco_mcl_adapter` transforma detecciones reales a range/bearing con ID, y MCL realiza la asociación contra el JSON de Parte A.
+El perfil real no inicia `landmark_sensor`. `aruco_mcl_adapter` transforma detecciones reales a range/bearing con ID, y MCL realiza la asociación contra el JSON de Parte A. `depth_topic` queda como override obligatorio de laboratorio si el tópico alineado de la OAK-D no coincide con el default del perfil.
+
+Antes de iniciar la misión completa, validar con el robot detenido:
+
+```bash
+ros2 topic echo --once /red_cone/vision_ready
+ros2 topic echo --once /mcl_pose
+ros2 topic echo /mission/status
+```
+
+Cancelación normal:
+
+```bash
+ros2 service call /mission/cancel std_srvs/srv/Trigger '{}'
+```
 
 ## Seguridad y fallos
 
-- Sin mapa o pose MCL, `/mission/start` falla sin mover el robot.
+- Sin mapa, pose MCL fresca o visión lista, `/mission/start` falla sin mover el robot.
+- En perfil real, la misión se cancela y publica `FAILED` si la pose MCL queda vieja, la covarianza supera los umbrales o la visión/TF de cámara deja de estar fresca.
 - Si A* no puede alcanzar un candidato, se descarta y se evalúa otro.
 - Si el cono se ve por una abertura, el objetivo final se valida sobre la grilla y el camino rodea paredes conocidas.
 - Ante timeout o cobertura agotada, se publica `NOT_FOUND` y se cancela navegación.
@@ -100,8 +120,17 @@ python3 tp_final_ws/src/tp_b_navigation/test/test_landmark_io.py -v
 python3 tp_final_ws/src/tp_c_mission/test/test_cone_perception.py -v
 python3 tp_final_ws/src/tp_c_mission/test/test_information_exploration.py -v
 python3 tp_final_ws/src/tp_c_mission/test/test_parte_c_contracts.py -v
-python3 -m compileall -q tp_final_ws/src/tp_b_navigation tp_final_ws/src/tp_c_mission
+python3 -m compileall -q tp_final_ws/src/tp_b_navigation tp_final_ws/src/tp_c_mission tp_final_ws/src/tp_platform
 git diff --check
 ```
 
-Con ROS 2, ejecutar además el build completo y probar ambos mundos. El bag de visión y el hardware real no están versionados, por lo que su validación requiere esos recursos externos.
+Sin ROS 2, usar los tests puros con `PYTHONPATH` explícito:
+
+```bash
+PYTHONPATH=tp_final_ws/src/tp_platform:tp_final_ws/src/tp_b_navigation:tp_final_ws/src/tp_c_mission \
+python3 -m pytest tp_final_ws/src/tp_c_mission/test/test_cone_perception.py \
+  tp_final_ws/src/tp_c_mission/test/test_information_exploration.py \
+  tp_final_ws/src/tp_c_mission/test/test_parte_c_contracts.py -q
+```
+
+Con ROS 2, ejecutar además el build completo, `--show-args` del launch real para `tb4_0` y `tb4_1`, y probar ambos mundos. El bag de visión y el hardware real no están versionados, por lo que su validación requiere esos recursos externos.

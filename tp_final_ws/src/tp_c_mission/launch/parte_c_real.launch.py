@@ -7,7 +7,13 @@ from launch.actions import DeclareLaunchArgument, OpaqueFunction
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 
-from tp_b_navigation.platform_profiles import BAG_TB4, REAL_TB4, resolve_profile
+from tp_platform.platform_profiles import (
+    BAG_TB4,
+    REAL_TB4,
+    resolve_profile,
+    validate_tb4_topics,
+    write_resolved_platform,
+)
 
 
 _UNSET = ''
@@ -22,8 +28,14 @@ def _override(context, name, default):
     return default if value == _UNSET else value
 
 
+def _bool_arg(context, name):
+    return _arg(context, name).lower() in ('1', 'true', 'yes', 'on')
+
+
 def _launch_nodes(context, mission_share, config):
-    profile = resolve_profile(_arg(context, 'profile'))
+    profile = resolve_profile(
+        _arg(context, 'profile'),
+        robot_namespace=_arg(context, 'robot_namespace'))
     use_sim_time = profile.use_sim_time
     map_yaml = LaunchConfiguration('map_yaml')
     landmark_map = LaunchConfiguration('landmark_map_file')
@@ -35,6 +47,46 @@ def _launch_nodes(context, mission_share, config):
     info = _override(context, 'camera_info_topic', profile.camera_info_topic)
     base_frame = _override(context, 'base_frame', profile.base_frame)
     odom_frame = _override(context, 'odom_frame', profile.odom_frame)
+    localization_safety_params = {
+        'enable_safety_gates': _bool_arg(context, 'enable_safety_gates'),
+        'max_mcl_pose_age': float(_arg(context, 'max_mcl_pose_age')),
+        'max_position_covariance': float(_arg(context, 'max_position_covariance')),
+        'max_yaw_covariance': float(_arg(context, 'max_yaw_covariance')),
+    }
+    monitor_safety_params = {
+        **localization_safety_params,
+        'max_scan_age': float(_arg(context, 'max_scan_age')),
+    }
+    state_machine_safety_params = {
+        **monitor_safety_params,
+        'max_monitor_age': float(_arg(context, 'max_monitor_age')),
+    }
+    validate_tb4_topics(
+        profile.robot_namespace,
+        odom_topic=odom_topic,
+        scan_topic=scan_topic,
+        cmd_vel_topic=cmd_vel_topic,
+        rgb_topic=rgb,
+        depth_topic=depth,
+        camera_info_topic=info,
+    )
+    write_resolved_platform(
+        _arg(context, 'artifact_dir') or '/tmp/tp_final_rob',
+        profile,
+        topics={
+            'odom_topic': odom_topic,
+            'scan_topic': scan_topic,
+            'cmd_vel_topic': cmd_vel_topic,
+            'rgb_topic': rgb,
+            'depth_topic': depth,
+            'camera_info_topic': info,
+        },
+        frames={'base_frame': base_frame, 'odom_frame': odom_frame},
+        artifacts={
+            'map_yaml': _arg(context, 'map_yaml'),
+            'landmark_map_file': _arg(context, 'landmark_map_file'),
+        },
+    )
 
     common_remaps = [('/odom', odom_topic),
                      ('/scan', scan_topic),
@@ -53,16 +105,17 @@ def _launch_nodes(context, mission_share, config):
                           'use_sim_time': use_sim_time}]),
         Node(package='tp_b_navigation', executable='obstacle_monitor', output='screen',
              parameters=[{'base_frame': base_frame,
-                          'use_sim_time': use_sim_time}],
+                          'use_sim_time': use_sim_time}, monitor_safety_params],
              remappings=common_remaps),
         Node(package='tp_b_navigation', executable='state_machine', output='screen',
              parameters=[{'base_frame': base_frame,
-                          'use_sim_time': use_sim_time}],
+                          'use_sim_time': use_sim_time},
+                         state_machine_safety_params],
              remappings=common_remaps),
         Node(package='tp_a_slam_aruco', executable='aruco_detector', output='screen',
              parameters=[{'image_topic': rgb, 'camera_frame': '',
                           'use_sim_time': use_sim_time}]),
-        Node(package='tp_c_mission', executable='aruco_mcl_adapter', output='screen',
+        Node(package='tp_b_navigation', executable='aruco_mcl_adapter', output='screen',
              parameters=[{'base_frame': base_frame,
                           'use_sim_time': use_sim_time}]),
         Node(package='tp_c_mission', executable='red_cone_detector', output='screen',
@@ -71,7 +124,8 @@ def _launch_nodes(context, mission_share, config):
                                   'use_sim_time': use_sim_time}]),
         Node(package='tp_c_mission', executable='mission_manager', output='screen',
              parameters=[config, {'landmark_map_file': landmark_map,
-                                  'use_sim_time': use_sim_time}]),
+                                  'use_sim_time': use_sim_time},
+                         localization_safety_params]),
     ]
 
 
@@ -82,6 +136,8 @@ def generate_launch_description():
     return LaunchDescription([
         DeclareLaunchArgument('profile', default_value='real_tb4',
                               choices=[REAL_TB4, BAG_TB4]),
+        DeclareLaunchArgument('robot_namespace', default_value='tb4_0'),
+        DeclareLaunchArgument('artifact_dir', default_value='/tmp/tp_final_rob'),
         DeclareLaunchArgument('map_yaml'),
         DeclareLaunchArgument('landmark_map_file'),
         DeclareLaunchArgument('odom_topic', default_value=_UNSET),
@@ -89,6 +145,12 @@ def generate_launch_description():
         DeclareLaunchArgument('cmd_vel_topic', default_value=_UNSET),
         DeclareLaunchArgument('base_frame', default_value=_UNSET),
         DeclareLaunchArgument('odom_frame', default_value=_UNSET),
+        DeclareLaunchArgument('enable_safety_gates', default_value='true'),
+        DeclareLaunchArgument('max_mcl_pose_age', default_value='1.0'),
+        DeclareLaunchArgument('max_scan_age', default_value='1.0'),
+        DeclareLaunchArgument('max_monitor_age', default_value='1.0'),
+        DeclareLaunchArgument('max_position_covariance', default_value='0.25'),
+        DeclareLaunchArgument('max_yaw_covariance', default_value='0.5'),
         DeclareLaunchArgument('rgb_topic',
                               default_value=_UNSET),
         DeclareLaunchArgument('depth_topic',

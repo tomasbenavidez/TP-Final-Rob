@@ -10,8 +10,9 @@ REPO_ROOT = PACKAGE_ROOT.parents[2]
 class ParteCContractsTest(unittest.TestCase):
     def test_package_exposes_required_nodes_and_launch_profiles(self):
         setup = (PACKAGE_ROOT / 'setup.py').read_text()
-        for executable in ('red_cone_detector', 'mission_manager', 'aruco_mcl_adapter'):
+        for executable in ('red_cone_detector', 'mission_manager'):
             self.assertIn(executable, setup)
+        self.assertNotIn('aruco_mcl_adapter', setup)
         for profile in ('parte_c_sim.launch.py', 'parte_c_bag.launch.py',
                         'parte_c_real.launch.py'):
             self.assertTrue((PACKAGE_ROOT / 'launch' / profile).is_file())
@@ -23,6 +24,12 @@ class ParteCContractsTest(unittest.TestCase):
             if "create_publisher(Twist, '/cmd_vel'" in path.read_text():
                 producers.append(path.name)
         self.assertEqual(producers, ['state_machine.py'])
+
+    def test_mission_package_never_publishes_cmd_vel(self):
+        for path in (PACKAGE_ROOT / 'tp_c_mission').glob('*.py'):
+            with self.subTest(path=path.name):
+                self.assertNotIn("create_publisher(Twist, '/cmd_vel'",
+                                 path.read_text())
 
     def test_mission_navigation_interfaces_are_explicit(self):
         source = (REPO_ROOT / 'tp_final_ws' / 'src' / 'tp_b_navigation' /
@@ -43,9 +50,42 @@ class ParteCContractsTest(unittest.TestCase):
         source = (PACKAGE_ROOT / 'launch' / 'parte_c_real.launch.py').read_text()
         self.assertIn("DeclareLaunchArgument('profile', default_value='real_tb4'",
                       source)
+        self.assertIn("DeclareLaunchArgument('robot_namespace'", source)
+        self.assertIn('validate_tb4_topics', source)
         self.assertIn('aruco_mcl_adapter', source)
+        self.assertIn(
+            "package='tp_b_navigation', executable='aruco_mcl_adapter'", source)
         self.assertIn('landmark_map_file', source)
         self.assertNotIn("executable='landmark_sensor'", source)
+
+    def test_real_profile_wires_mission_safety_gates(self):
+        launch = (PACKAGE_ROOT / 'launch' / 'parte_c_real.launch.py').read_text()
+        manager = (PACKAGE_ROOT / 'tp_c_mission' / 'mission_manager_node.py').read_text()
+        config = (PACKAGE_ROOT / 'config' / 'parte_c.yaml').read_text()
+
+        for argument in (
+            'enable_safety_gates',
+            'max_mcl_pose_age',
+            'max_position_covariance',
+            'max_yaw_covariance',
+        ):
+            self.assertIn(f"DeclareLaunchArgument('{argument}'", launch)
+            self.assertIn(f"'{argument}':", launch)
+            self.assertIn(f"'{argument}':", manager)
+            self.assertIn(f'{argument}:', config)
+        self.assertIn("default_value='true'", launch)
+        self.assertIn('localization_gate(', manager)
+        self.assertIn('last_mcl_pose_stamp', manager)
+        self.assertIn('last_mcl_covariance', manager)
+
+    def test_mission_failure_paths_cancel_navigation_and_publish_failed(self):
+        source = (PACKAGE_ROOT / 'tp_c_mission' / 'mission_manager_node.py').read_text()
+
+        self.assertIn("self._fail_mission('vision_stale')", source)
+        self.assertIn("self._fail_mission(reason)", source)
+        self.assertIn('self.cancel_pub.publish(Empty())', source)
+        self.assertIn("self._set_status('FAILED')", source)
+        self.assertIn('Faltan /map, /mcl_pose o cámara/TF disponible.', source)
 
     def test_bag_profile_opens_navigation_rviz_for_detector_calibration(self):
         launch = (PACKAGE_ROOT / 'launch' / 'parte_c_bag.launch.py').read_text()
@@ -54,6 +94,8 @@ class ParteCContractsTest(unittest.TestCase):
         self.assertIn("DeclareLaunchArgument('launch_rviz'", launch)
         self.assertIn("DeclareLaunchArgument('bag_path'", launch)
         self.assertIn("DeclareLaunchArgument('play_bag'", launch)
+        self.assertIn("DeclareLaunchArgument(\n            'robot_namespace'", launch)
+        self.assertIn('resolve_profile(BAG_TB4', launch)
         self.assertIn("default_value='true'", launch)
         self.assertIn("ros2', 'bag', 'play'", launch)
         self.assertIn("'--clock'", launch)

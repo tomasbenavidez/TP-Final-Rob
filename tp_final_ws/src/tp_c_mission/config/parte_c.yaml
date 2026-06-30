@@ -31,3 +31,9 @@ mission_manager:
     auto_start: false
     vision_timeout: 3.0
     min_goal_new_cells: 8
+    # El launch real sobreescribe enable_safety_gates:=true. En simulación queda
+    # apagado por defecto para preservar los flujos existentes de Parte C.
+    enable_safety_gates: false
+    max_mcl_pose_age: 1.0
+    max_position_covariance: 0.25
+    max_yaw_covariance: 0.5
