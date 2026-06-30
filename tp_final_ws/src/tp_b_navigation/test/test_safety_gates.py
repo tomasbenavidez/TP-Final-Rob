@@ -172,3 +172,34 @@ def test_disabled_monitor_gate_preserves_simulation_behavior():
     )
 
     assert reason is None
+
+
+def test_first_identified_observation_may_correct_while_stationary():
+    from tp_b_navigation.safety_gates import measurement_update_due
+
+    assert measurement_update_due(
+        accum_d=0.0,
+        accum_a=0.0,
+        min_d=0.02,
+        min_a=0.02,
+        allow_stationary=True,
+    )
+
+
+def test_repeated_stationary_observation_waits_for_motion():
+    from tp_b_navigation.safety_gates import measurement_update_due
+
+    assert not measurement_update_due(
+        accum_d=0.0,
+        accum_a=0.0,
+        min_d=0.02,
+        min_a=0.02,
+        allow_stationary=False,
+    )
+
+
+def test_measurement_update_is_due_after_translation_or_rotation():
+    from tp_b_navigation.safety_gates import measurement_update_due
+
+    assert measurement_update_due(0.03, 0.0, 0.02, 0.02)
+    assert measurement_update_due(0.0, 0.03, 0.02, 0.02)

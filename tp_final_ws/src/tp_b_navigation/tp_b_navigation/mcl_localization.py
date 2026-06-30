@@ -40,6 +40,58 @@ from tp_b_navigation.utils import (
     normalize_angle, angle_diff, yaw_from_quaternion, quaternion_from_yaw,
 )
 from tp_b_navigation.landmark_io import load_landmark_map
+from tp_b_navigation.safety_gates import measurement_update_due
+
+
+def predict_particles(
+    particles,
+    previous_odom,
+    current_odom,
+    alphas,
+    rng,
+):
+    """Apply the Thrun odometry model and return a propagated particle copy."""
+    predicted = np.asarray(particles, dtype=float).copy()
+    dx = current_odom[0] - previous_odom[0]
+    dy = current_odom[1] - previous_odom[1]
+    dtrans = math.hypot(dx, dy)
+    drot1 = (
+        angle_diff(math.atan2(dy, dx), previous_odom[2])
+        if dtrans > 1e-3 else 0.0
+    )
+    drot2 = angle_diff(
+        angle_diff(current_odom[2], previous_odom[2]),
+        drot1,
+    )
+    a1, a2, a3, a4 = alphas
+    sd_rot1 = math.sqrt(a1 * drot1 ** 2 + a2 * dtrans ** 2)
+    sd_trans = math.sqrt(
+        a3 * dtrans ** 2 + a4 * (drot1 ** 2 + drot2 ** 2)
+    )
+    sd_rot2 = math.sqrt(a1 * drot2 ** 2 + a2 * dtrans ** 2)
+    count = len(predicted)
+    rot1 = drot1 - rng.normal(0.0, sd_rot1 + 1e-9, count)
+    trans = dtrans - rng.normal(0.0, sd_trans + 1e-9, count)
+    rot2 = drot2 - rng.normal(0.0, sd_rot2 + 1e-9, count)
+    theta = predicted[:, 2].copy()
+    predicted[:, 0] += trans * np.cos(theta + rot1)
+    predicted[:, 1] += trans * np.sin(theta + rot1)
+    predicted[:, 2] = np.arctan2(
+        np.sin(theta + rot1 + rot2),
+        np.cos(theta + rot1 + rot2),
+    )
+    return predicted
+
+
+def map_to_odom_pose(estimate, odom_pose):
+    """Return planar T_map_odom from T_map_base and T_odom_base."""
+    mx, my, mth = estimate
+    ox, oy, oth = odom_pose
+    th_mo = normalize_angle(mth - oth)
+    cos_t, sin_t = math.cos(th_mo), math.sin(th_mo)
+    x_mo = mx - (ox * cos_t - oy * sin_t)
+    y_mo = my - (ox * sin_t + oy * cos_t)
+    return x_mo, y_mo, th_mo
 
 
 class MCL(Node):
@@ -111,6 +163,7 @@ class MCL(Node):
         self.last_odom_pose = None    # pose de referencia para TF map->odom
         self.accum_d = 0.0           # movimiento acumulado desde la última corrección
         self.accum_a = 0.0
+        self.allow_stationary_identified_correction = False
         self.estimate = None         # (x, y, theta) estimado en map
 
         # --- QoS / pub-sub ---
@@ -178,6 +231,7 @@ class MCL(Node):
         self.initialized = True
         self.accum_d = 0.0
         self.accum_a = 0.0
+        self.allow_stationary_identified_correction = True
         self._update_estimate()
         self.get_logger().info(
             f'Pose inicial fijada en ({x:.2f}, {y:.2f}, {math.degrees(yaw):.0f}°).')
@@ -200,6 +254,9 @@ class MCL(Node):
 
         self._predict(self.last_motion_odom, cur)
         self.last_motion_odom = cur
+        self._update_estimate()
+        self.publish_particles()
+        self.publish_pose()
 
     def reference_odom_cb(self, msg: Odometry):
         """Guarda T_odom_base para construir la TF sin contaminar la predicción."""
@@ -214,25 +271,39 @@ class MCL(Node):
         if not self.initialized or self.landmarks is None:
             return
         # Sólo corregimos si hubo movimiento apreciable (evita degeneración estática).
-        if self.accum_d < self.update_min_d and self.accum_a < self.update_min_a:
+        if not measurement_update_due(
+            self.accum_d,
+            self.accum_a,
+            self.update_min_d,
+            self.update_min_a,
+        ):
             return
-        self._correct(msg)
-        self.accum_d = 0.0
-        self.accum_a = 0.0
+        used = self._correct(msg)
+        if used:
+            self.accum_d = 0.0
+            self.accum_a = 0.0
 
     def identified_observation_cb(self, msg: LandmarkObservationArray):
         if not self.initialized or not self.landmarks_by_id:
             return
-        if self.accum_d < self.update_min_d and self.accum_a < self.update_min_a:
+        if not measurement_update_due(
+            self.accum_d,
+            self.accum_a,
+            self.update_min_d,
+            self.update_min_a,
+            allow_stationary=self.allow_stationary_identified_correction,
+        ):
             return
         measurements = [
             (int(obs.landmark_id), float(obs.range_m), float(obs.bearing_rad))
             for obs in msg.observations
             if obs.range_m > 0.0 and int(obs.landmark_id) in self.landmarks_by_id
         ]
-        self._correct_measurements(measurements)
-        self.accum_d = 0.0
-        self.accum_a = 0.0
+        used = self._correct_measurements(measurements)
+        if used:
+            self.accum_d = 0.0
+            self.accum_a = 0.0
+            self.allow_stationary_identified_correction = False
 
     # ------------------------------------------------------------ modelo de movimiento
     def _predict(self, prev, cur):
@@ -240,28 +311,15 @@ class MCL(Node):
         dx = cur[0] - prev[0]
         dy = cur[1] - prev[1]
         dtrans = math.hypot(dx, dy)
-        # Si casi no se trasladó, drot1 es inestable -> lo anulamos.
-        drot1 = angle_diff(math.atan2(dy, dx), prev[2]) if dtrans > 1e-3 else 0.0
-        drot2 = angle_diff(angle_diff(cur[2], prev[2]), drot1)
-
         self.accum_d += dtrans
         self.accum_a += abs(angle_diff(cur[2], prev[2]))
-
-        n = self.N
-        # Desvíos de ruido dependientes del movimiento (Probabilistic Robotics, 5.4).
-        sd_rot1 = math.sqrt(self.a1 * drot1 ** 2 + self.a2 * dtrans ** 2)
-        sd_trans = math.sqrt(self.a3 * dtrans ** 2 + self.a4 * (drot1 ** 2 + drot2 ** 2))
-        sd_rot2 = math.sqrt(self.a1 * drot2 ** 2 + self.a2 * dtrans ** 2)
-
-        rot1 = drot1 - np.random.normal(0.0, sd_rot1 + 1e-9, n)
-        trans = dtrans - np.random.normal(0.0, sd_trans + 1e-9, n)
-        rot2 = drot2 - np.random.normal(0.0, sd_rot2 + 1e-9, n)
-
-        theta = self.particles[:, 2]
-        self.particles[:, 0] += trans * np.cos(theta + rot1)
-        self.particles[:, 1] += trans * np.sin(theta + rot1)
-        self.particles[:, 2] = np.arctan2(
-            np.sin(theta + rot1 + rot2), np.cos(theta + rot1 + rot2))
+        self.particles = predict_particles(
+            self.particles,
+            previous_odom=prev,
+            current_odom=cur,
+            alphas=(self.a1, self.a2, self.a3, self.a4),
+            rng=np.random,
+        )
 
     # ------------------------------------------------------------ modelo de medición
     def _correct(self, msg: PoseArray):
@@ -274,7 +332,7 @@ class MCL(Node):
             if range_m == 0.0 and bearing == 0.0:
                 continue
             measurements.append((index, range_m, bearing))
-        self._correct_measurements(measurements)
+        return self._correct_measurements(measurements)
 
     def _correct_measurements(self, measurements):
         log_w = np.zeros(self.N)
@@ -305,7 +363,7 @@ class MCL(Node):
             log_w += -(dr * dr) * inv_2sr2 - (dphi * dphi) * inv_2sb2
 
         if used == 0:
-            return
+            return 0
 
         # De log-pesos a pesos normalizados (estable numéricamente).
         log_w -= np.max(log_w)
@@ -322,6 +380,7 @@ class MCL(Node):
         self._update_estimate()
         self.publish_particles()
         self.publish_pose()
+        return used
 
     def _resample(self):
         """Resampling low-variance (sistemático)."""
@@ -398,14 +457,10 @@ class MCL(Node):
         """Publica la TF map->odom derivada de la pose estimada y la odometría actual."""
         if self.estimate is None or self.last_odom_pose is None:
             return
-        mx, my, mth = self.estimate
-        ox, oy, oth = self.last_odom_pose
-
-        # T_map_odom = T_map_base * inv(T_odom_base)
-        th_mo = normalize_angle(mth - oth)
-        cos_t, sin_t = math.cos(th_mo), math.sin(th_mo)
-        x_mo = mx - (ox * cos_t - oy * sin_t)
-        y_mo = my - (ox * sin_t + oy * cos_t)
+        x_mo, y_mo, th_mo = map_to_odom_pose(
+            self.estimate,
+            self.last_odom_pose,
+        )
 
         t = TransformStamped()
         # Adelantar el stamp por transform_tolerance: la TF queda válida para lookups a

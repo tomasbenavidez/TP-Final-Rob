@@ -25,6 +25,20 @@ def _covariance_values(covariance):
     return math.inf, math.inf, math.inf
 
 
+def measurement_update_due(
+    accum_d,
+    accum_a,
+    min_d,
+    min_a,
+    allow_stationary=False,
+):
+    return (
+        allow_stationary
+        or accum_d >= min_d
+        or accum_a >= min_a
+    )
+
+
 def localization_gate(now_s, last_pose_stamp_s, covariance, config):
     if not config.enabled:
         return None
