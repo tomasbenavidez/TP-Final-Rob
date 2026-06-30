@@ -39,12 +39,19 @@ import os
 
 import numpy as np
 import rclpy
+import rclpy.time
 from rclpy.node import Node
 from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy
 from sensor_msgs.msg import LaserScan
 from nav_msgs.msg import OccupancyGrid, Odometry
+from tf2_ros import Buffer, TransformListener
 
 from tp_a_slam_aruco.motion_model import yaw_from_quaternion, normalize_angle
+from tp_a_slam_aruco.scan_projection import (
+    fallback_sensor_pose_in_map,
+    iter_valid_scan_points,
+    sensor_pose_in_map,
+)
 from tp_a_slam_aruco.slam_geometry import (
     se2_compose,
     se2_interpolate,
@@ -80,6 +87,7 @@ class OccupancyGridNode(Node):
         self.declare_parameter('map_margin',    3.0)
         self.declare_parameter('scan_topic',   'tb4_0/scan')
         self.declare_parameter('odom_topic',   'tb4_0/odom')
+        self.declare_parameter('base_frame',   'base_link')
         self.declare_parameter('trajectory_file', '')
         self.declare_parameter('map_output',   '/tmp/mapa')
         self.declare_parameter('publish_every', 50)
@@ -90,6 +98,7 @@ class OccupancyGridNode(Node):
         self.declare_parameter('lidar_tx',     -0.04)
         self.declare_parameter('lidar_ty',      0.0)
         self.declare_parameter('lidar_yaw',     math.pi / 2)
+        self.declare_parameter('lidar_fallback_enabled', True)
         # No integrar scans cuando el robot gira rapido: durante un giro la pose
         # angular es la menos confiable y un barrido de 360deg se distorsiona.
         # rad/s; <=0 desactiva el gate. Se mide sobre la odometria densa.
@@ -101,6 +110,9 @@ class OccupancyGridNode(Node):
         self.lidar_tx      = self.get_parameter('lidar_tx').value
         self.lidar_ty      = self.get_parameter('lidar_ty').value
         self.lidar_yaw     = self.get_parameter('lidar_yaw').value
+        self.base_frame    = self.get_parameter('base_frame').value
+        self.lidar_fallback_enabled = bool(
+            self.get_parameter('lidar_fallback_enabled').value)
         self.max_angular_velocity = float(self.get_parameter('max_angular_velocity').value)
 
         # Cargar trayectoria corregida desde JSON
@@ -178,6 +190,9 @@ class OccupancyGridNode(Node):
         self.log_odds = np.zeros((self.height, self.width), dtype=np.float32)
         self.scan_count = 0
 
+        self.tf_buffer = Buffer()
+        self.tf_listener = TransformListener(self.tf_buffer, self)
+
         self.map_pub = self.create_publisher(OccupancyGrid, '/map', 10)
 
         best_effort = QoSProfile(
@@ -200,13 +215,18 @@ class OccupancyGridNode(Node):
 
         self.scans_skipped_no_pose = 0
         self.scans_skipped_turning = 0
+        self.scans_skipped_no_lidar_tf = 0
+        self.scans_integrated_with_tf = 0
+        self.scans_integrated_with_fallback = 0
 
         self.get_logger().info(
             f'occupancy_grid_node activo. '
             f'Grilla {self.width}x{self.height} @ {self.resolution} m/cel '
             f'({self.width * self.resolution:.1f}x{self.height * self.resolution:.1f} m). '
             f'Origen ({self.origin_x}, {self.origin_y}). '
-            f'LIDAR offset tx={self.lidar_tx} ty={self.lidar_ty} yaw={self.lidar_yaw:.4f}. '
+            f'base_frame={self.base_frame}. '
+            f'LIDAR fallback enabled={self.lidar_fallback_enabled} '
+            f'tx={self.lidar_tx} ty={self.lidar_ty} yaw={self.lidar_yaw:.4f}. '
             f'max_angular_velocity={self.max_angular_velocity}.'
         )
 
@@ -294,45 +314,79 @@ class OccupancyGridNode(Node):
             return se2_compose(self._correction_at(t), odom)
         return self._interpolate_pose(t)
 
+    @staticmethod
+    def _transform_to_planar_pose(transform):
+        tr = transform.transform
+        q = tr.rotation
+        yaw = yaw_from_quaternion(q.x, q.y, q.z, q.w)
+        return tr.translation.x, tr.translation.y, yaw
+
+    def _lookup_base_from_scan(self, scan):
+        sensor_frame = scan.header.frame_id
+        if not sensor_frame:
+            raise ValueError('scan.header.frame_id vacío')
+        stamp = rclpy.time.Time.from_msg(scan.header.stamp)
+        transform = self.tf_buffer.lookup_transform(
+            self.base_frame,
+            sensor_frame,
+            stamp,
+        )
+        return self._transform_to_planar_pose(transform)
+
+    def _sensor_pose_for_scan(self, robot_pose, scan):
+        try:
+            base_from_sensor = self._lookup_base_from_scan(scan)
+            self.scans_integrated_with_tf += 1
+            return sensor_pose_in_map(robot_pose, base_from_sensor), 'tf'
+        except Exception as exc:  # noqa: BLE001
+            if not self.lidar_fallback_enabled:
+                self.get_logger().warn(
+                    f'TF {self.base_frame}<-{scan.header.frame_id} no disponible '
+                    f'y fallback LIDAR deshabilitado: {exc}',
+                    throttle_duration_sec=2.0,
+                )
+                self.scans_skipped_no_lidar_tf += 1
+                return None, 'missing'
+            self.get_logger().warn(
+                f'TF {self.base_frame}<-{scan.header.frame_id} no disponible; '
+                f'usando extrínsecos LIDAR fallback: {exc}',
+                throttle_duration_sec=2.0,
+            )
+            self.scans_integrated_with_fallback += 1
+            return fallback_sensor_pose_in_map(
+                robot_pose,
+                self.lidar_tx,
+                self.lidar_ty,
+                self.lidar_yaw,
+            ), 'fallback'
+
     # ------------------------------------------------------------------ #
     #  Integración de un barrido LIDAR                                     #
     # ------------------------------------------------------------------ #
 
-    def integrate_scan(self, robot_pose, scan: LaserScan):
-        """Proyecta un barrido LaserScan en la grilla log-odds desde la pose dada."""
-        rx, ry, rth = robot_pose
-
-        # Posición del LIDAR en frame map (componer offset del sensor)
-        lx  = rx + self.lidar_tx * math.cos(rth) - self.lidar_ty * math.sin(rth)
-        ly  = ry + self.lidar_tx * math.sin(rth) + self.lidar_ty * math.cos(rth)
-        lth = rth + self.lidar_yaw
-
+    def integrate_scan(self, sensor_pose, scan: LaserScan):
+        """Proyecta un barrido LaserScan en la grilla desde la pose del sensor."""
+        lx, ly, lth = sensor_pose
         gx0, gy0 = self._world_to_grid(lx, ly)
 
-        angle = scan.angle_min
-        for r in scan.ranges:
-            if not (math.isnan(r) or math.isinf(r) or
-                    r < scan.range_min or r > scan.range_max):
-                ray_angle = lth + angle
-                wx = lx + r * math.cos(ray_angle)
-                wy = ly + r * math.sin(ray_angle)
-                gx1, gy1 = self._world_to_grid(wx, wy)
+        for sx, sy, _angle, _range in iter_valid_scan_points(scan):
+            wx = lx + sx * math.cos(lth) - sy * math.sin(lth)
+            wy = ly + sx * math.sin(lth) + sy * math.cos(lth)
+            gx1, gy1 = self._world_to_grid(wx, wy)
 
-                cells = self._bresenham(gx0, gy0, gx1, gy1)
+            cells = self._bresenham(gx0, gy0, gx1, gy1)
 
-                # Celdas libres (todas menos la de impacto)
-                for cx, cy in cells[:-1]:
-                    if self._in_bounds(cx, cy):
-                        v = self.log_odds[cy, cx] + _L_FREE
-                        self.log_odds[cy, cx] = max(_L_MIN, v)
-
-                # Celda de impacto → ocupada
-                cx, cy = cells[-1]
+            # Celdas libres (todas menos la de impacto)
+            for cx, cy in cells[:-1]:
                 if self._in_bounds(cx, cy):
-                    v = self.log_odds[cy, cx] + _L_OCC
-                    self.log_odds[cy, cx] = min(_L_MAX, v)
+                    v = self.log_odds[cy, cx] + _L_FREE
+                    self.log_odds[cy, cx] = max(_L_MIN, v)
 
-            angle += scan.angle_increment
+            # Celda de impacto → ocupada
+            cx, cy = cells[-1]
+            if self._in_bounds(cx, cy):
+                v = self.log_odds[cy, cx] + _L_OCC
+                self.log_odds[cy, cx] = min(_L_MAX, v)
 
     # ------------------------------------------------------------------ #
     #  Callback de scan                                                    #
@@ -354,13 +408,19 @@ class OccupancyGridNode(Node):
             # Odometria densa todavia no disponible para este scan; se descarta.
             self.scans_skipped_no_pose += 1
             return
-        self.integrate_scan(pose, msg)
+        sensor_pose, source = self._sensor_pose_for_scan(pose, msg)
+        if sensor_pose is None:
+            return
+        self.integrate_scan(sensor_pose, msg)
         self.scan_count += 1
         if self.scan_count % self.publish_every == 0:
             self.get_logger().info(
                 f'Scans integrados: {self.scan_count} '
                 f'(descartados: sin_pose={self.scans_skipped_no_pose}, '
-                f'girando={self.scans_skipped_turning})')
+                f'girando={self.scans_skipped_turning}, '
+                f'sin_lidar_tf={self.scans_skipped_no_lidar_tf}; '
+                f'fuente_lidar={source}, tf={self.scans_integrated_with_tf}, '
+                f'fallback={self.scans_integrated_with_fallback})')
             self.publish_map()
 
     # ------------------------------------------------------------------ #
@@ -424,7 +484,10 @@ class OccupancyGridNode(Node):
             f'Mapa exportado → {pgm_path} '
             f'({self.width}x{self.height} px, '
             f'{self.width * self.resolution:.1f}x{self.height * self.resolution:.1f} m). '
-            f'Scans totales integrados: {self.scan_count}.')
+            f'Scans totales integrados: {self.scan_count}. '
+            f'LIDAR TF={self.scans_integrated_with_tf}, '
+            f'fallback={self.scans_integrated_with_fallback}, '
+            f'sin_lidar_tf={self.scans_skipped_no_lidar_tf}.')
 
 
 def main(args=None):

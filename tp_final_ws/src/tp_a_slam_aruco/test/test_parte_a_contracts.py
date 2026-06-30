@@ -25,6 +25,34 @@ def test_slam_launch_uses_raw_aruco_detections_for_graph_input():
     assert "'max_landmark_position_jump': ParameterValue(" in text
 
 
+def test_mapping_launch_exposes_scan_tf_and_fallback_controls():
+    launch_path = Path(__file__).resolve().parents[1] / 'launch' / 'parte_a_mapa.launch.py'
+    text = launch_path.read_text()
+
+    assert "DeclareLaunchArgument(\n        'scan_topic'" in text
+    assert "DeclareLaunchArgument(\n        'base_frame'" in text
+    assert "DeclareLaunchArgument(\n        'lidar_fallback_enabled'" in text
+    assert "DeclareLaunchArgument(\n        'use_bag_tf'" in text
+    assert "DeclareLaunchArgument(\n        'bag_tf_topic'" in text
+    assert "DeclareLaunchArgument(\n        'bag_tf_static_topic'" in text
+    assert "executable='tf_bridge'" in text
+    assert "'scan_topic':      scan_topic" in text
+    assert "'base_frame':      base_frame" in text
+
+
+def test_occupancy_grid_reports_lidar_tf_and_fallback_sources():
+    node_path = (
+        Path(__file__).resolve().parents[1] / 'tp_a_slam_aruco'
+        / 'occupancy_grid_node.py')
+    text = node_path.read_text()
+
+    assert 'lookup_transform(\n            self.base_frame,' in text
+    assert 'scan.header.frame_id' in text
+    assert 'scans_integrated_with_tf' in text
+    assert 'scans_integrated_with_fallback' in text
+    assert 'scans_skipped_no_lidar_tf' in text
+
+
 def test_readme_documents_two_pass_outputs_and_raw_detection_topic():
     readme_path = Path(__file__).resolve().parents[4] / 'README.md'
     text = readme_path.read_text()

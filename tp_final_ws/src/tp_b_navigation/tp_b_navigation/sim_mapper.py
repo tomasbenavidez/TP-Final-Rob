@@ -43,6 +43,8 @@ import tf2_ros
 from sensor_msgs.msg import LaserScan
 from nav_msgs.msg import OccupancyGrid
 
+from tp_b_navigation.scan_projection import transform_scan_points
+
 # --- Constantes del modelo de sensor inverso (idénticas a occupancy_grid_node de Parte A) ---
 _L_OCC = 0.85    # evidencia de celda ocupada (≈ log(0.70/0.30))
 _L_FREE = -0.40  # evidencia de celda libre (asimétrico: más conservador al limpiar)
@@ -208,27 +210,30 @@ class SimMapper(Node):
         lx, ly, lth = sensor_pose
         gx0, gy0 = self._world_to_grid(lx, ly)
 
-        angle = scan.angle_min
-        for r in scan.ranges:
-            if not (math.isnan(r) or math.isinf(r) or
-                    r < scan.range_min or r > scan.range_max):
-                ray_angle = lth + angle
-                wx = lx + r * math.cos(ray_angle)
-                wy = ly + r * math.sin(ray_angle)
-                gx1, gy1 = self._world_to_grid(wx, wy)
+        points = transform_scan_points(
+            ranges=scan.ranges,
+            angle_min=scan.angle_min,
+            angle_max=scan.angle_max,
+            angle_increment=scan.angle_increment,
+            range_min=scan.range_min,
+            range_max=scan.range_max,
+            base_from_sensor=sensor_pose,
+            map_from_sensor=sensor_pose,
+        )
+        for point in points:
+            gx1, gy1 = self._world_to_grid(point.map_x, point.map_y)
 
-                cells = bresenham_cells(gx0, gy0, gx1, gy1)
-                # Celdas libres (todas menos la de impacto)
-                for cx, cy in cells[:-1]:
-                    if self._in_bounds(cx, cy):
-                        v = self.log_odds[cy, cx] + _L_FREE
-                        self.log_odds[cy, cx] = max(_L_MIN, v)
-                # Celda de impacto → ocupada
-                cx, cy = cells[-1]
+            cells = bresenham_cells(gx0, gy0, gx1, gy1)
+            # Celdas libres (todas menos la de impacto)
+            for cx, cy in cells[:-1]:
                 if self._in_bounds(cx, cy):
-                    v = self.log_odds[cy, cx] + _L_OCC
-                    self.log_odds[cy, cx] = min(_L_MAX, v)
-            angle += scan.angle_increment
+                    v = self.log_odds[cy, cx] + _L_FREE
+                    self.log_odds[cy, cx] = max(_L_MIN, v)
+            # Celda de impacto → ocupada
+            cx, cy = cells[-1]
+            if self._in_bounds(cx, cy):
+                v = self.log_odds[cy, cx] + _L_OCC
+                self.log_odds[cy, cx] = min(_L_MAX, v)
 
     # ------------------------------------------------------------------ #
     def publish_map(self):

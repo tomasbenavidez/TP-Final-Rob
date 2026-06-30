@@ -20,6 +20,7 @@ import math
 import numpy as np
 
 import rclpy
+import rclpy.time
 from rclpy.node import Node
 from rclpy.executors import ExternalShutdownException
 from rclpy.qos import (QoSProfile, DurabilityPolicy, ReliabilityPolicy,
@@ -32,6 +33,7 @@ from std_msgs.msg import Bool
 from tf2_ros import Buffer, TransformListener
 
 from tp_b_navigation.dynamic_obstacles import mark_dynamic_obstacles, same_static_occupancy
+from tp_b_navigation.scan_projection import transform_scan_points
 from tp_b_navigation.utils import yaw_from_quaternion
 
 
@@ -90,6 +92,8 @@ class ObstacleMonitor(Node):
 
         self.tf_buffer = Buffer()
         self.tf_listener = TransformListener(self.tf_buffer, self)
+        self.scans_skipped_no_tf = 0
+        self.points_rejected_invalid_ranges = 0
 
         self.get_logger().info(
             f'obstacle_monitor activo (danger={self.danger} m, cono=±{math.degrees(self.cone):.0f}°).')
@@ -114,41 +118,85 @@ class ObstacleMonitor(Node):
     def _now(self):
         return self.get_clock().now().nanoseconds * 1e-9
 
+    @staticmethod
+    def _transform_to_planar_pose(transform):
+        tr = transform.transform
+        return (
+            tr.translation.x,
+            tr.translation.y,
+            yaw_from_quaternion(tr.rotation),
+        )
+
+    @staticmethod
+    def _declared_beam_count(scan):
+        if scan.angle_increment <= 0.0:
+            return 0
+        span = scan.angle_max - scan.angle_min
+        if span < 0.0:
+            return 0
+        declared = int(math.floor(span / scan.angle_increment + 1e-9)) + 1
+        return min(len(scan.ranges), declared)
+
+    def _lookup_scan_poses(self, scan):
+        sensor_frame = scan.header.frame_id or self.base_frame
+        stamp = rclpy.time.Time.from_msg(scan.header.stamp)
+        base_tf = self.tf_buffer.lookup_transform(
+            self.base_frame, sensor_frame, stamp)
+        map_tf = self.tf_buffer.lookup_transform(
+            self.global_frame, sensor_frame, stamp)
+        return (
+            self._transform_to_planar_pose(base_tf),
+            self._transform_to_planar_pose(map_tf),
+        )
+
     def scan_cb(self, scan: LaserScan):
         if self.occ is None:
             return
         try:
-            tr = self.tf_buffer.lookup_transform(
-                self.global_frame, self.base_frame, rclpy.time.Time())
-        except Exception:
+            base_from_sensor, map_from_sensor = self._lookup_scan_poses(scan)
+        except Exception as exc:  # noqa: BLE001
+            self.scans_skipped_no_tf += 1
+            self.get_logger().warn(
+                f'TF para proyectar scan {scan.header.frame_id} no disponible: {exc}',
+                throttle_duration_sec=2.0,
+            )
             return  # sin localización todavía: no podemos discriminar mapeado/no-mapeado
 
-        rx = tr.transform.translation.x
-        ry = tr.transform.translation.y
-        rth = yaw_from_quaternion(tr.transform.rotation)
-
         ranges = np.asarray(scan.ranges, dtype=float)
-        n = ranges.size
-        if n == 0:
+        if ranges.size == 0:
             return
-        angles = scan.angle_min + np.arange(n) * scan.angle_increment
 
-        # cono frontal: |angulo| <= cono ; rango válido y < danger
-        valid = (np.isfinite(ranges) & (ranges > scan.range_min) &
-                 (ranges < self.danger))
-        # normalizar ángulo del haz a [-pi,pi] para el test de cono frontal
-        a_norm = np.arctan2(np.sin(angles), np.cos(angles))
-        frontal = np.abs(a_norm) <= self.cone
-        sel = valid & frontal
+        projected = transform_scan_points(
+            ranges=ranges,
+            angle_min=scan.angle_min,
+            angle_max=scan.angle_max,
+            angle_increment=scan.angle_increment,
+            range_min=scan.range_min,
+            range_max=scan.range_max,
+            base_from_sensor=base_from_sensor,
+            map_from_sensor=map_from_sensor,
+        )
+        self.points_rejected_invalid_ranges += (
+            self._declared_beam_count(scan) - len(projected))
+        if not projected:
+            return
 
-        r = ranges[sel]
-        a = angles[sel]
-        # punto en frame robot -> frame map
-        bx = r * np.cos(a)
-        by = r * np.sin(a)
-        cos_t, sin_t = math.cos(rth), math.sin(rth)
-        mx = rx + bx * cos_t - by * sin_t
-        my = ry + bx * sin_t + by * cos_t
+        # cono frontal en base_frame, luego consulta de celda en global_frame.
+        selected = []
+        for point in projected:
+            base_range = math.hypot(point.base_x, point.base_y)
+            if base_range >= self.danger:
+                continue
+            bearing = math.atan2(point.base_y, point.base_x)
+            if abs(math.atan2(math.sin(bearing), math.cos(bearing))) > self.cone:
+                continue
+            selected.append(point)
+        if not selected:
+            self.pub.publish(Bool(data=False))
+            return
+
+        mx = np.asarray([point.map_x for point in selected], dtype=float)
+        my = np.asarray([point.map_y for point in selected], dtype=float)
 
         cols = ((mx - self.ox) / self.res).astype(int)
         rows = ((my - self.oy) / self.res).astype(int)
