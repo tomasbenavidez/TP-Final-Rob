@@ -1,301 +1,426 @@
-# TP Final de Robótica Autónoma
+# TP Final de Robótica Autónoma — guía de laboratorio TB4
 
-El procedimiento ejecutable para el dia de laboratorio esta en el
-**[runbook final de TurtleBot4](docs/2026-06-30-tb4-laboratory-runbook.md)**.
-Incluye terminales, seguridad, adquisicion, etapas A/B/C, criterios de
-aceptacion, troubleshooting y artefactos para `tb4_0` y `tb4_1`.
+Esta es la guía única para ejecutar la prueba física con un TurtleBot4. El
+flujo es secuencial:
+
+1. **Parte A:** grabar un bag, ejecutar Graph SLAM con ArUco y generar el mapa.
+2. **Parte B:** localizar el robot con MCL y navegar sobre ese mapa.
+3. **Parte C:** explorar, detectar el cono rojo con RGB-D y aproximarse.
+
+Parte A produce `trajectory.json`, `map.yaml` y `map.pgm`; Partes B y C usan
+esos mismos artefactos. No ejecutar las partes simultáneamente.
 
 La preparación local y con bags está verificada. Los gates físicos B1–B3 y
-C1–C3 siguen pendientes hasta ejecutarlos sobre un TurtleBot4; el runbook no
-los da por aprobados. La evidencia reproducible disponible se resume en:
+C1–C3 siguen pendientes hasta ejecutarlos sobre un TB4. La evidencia disponible
+está en [Parte A](docs/parte_a/tb4-map-comparison.md) y
+[Parte B](docs/parte_b/tb4-mcl-obstacle-diagnostic.md).
 
-- [comparación de mapas y bracketing de Parte A](docs/parte_a/tb4-map-comparison.md);
-- [diagnóstico MCL/obstáculos de Parte B](docs/parte_b/tb4-mcl-obstacle-diagnostic.md).
+## 1. Preparar la notebook
 
-Implementación ROS 2 del flujo completo del trabajo final:
+Requisitos: Ubuntu con ROS 2 Humble, Miniforge en `~/miniforge3`, el entorno
+`rosenv_mf`, `colcon`, GTSAM, OpenCV contrib, SciPy y acceso SSH al TB4.
 
-1. **Parte A — SLAM y mapeo:** procesa un rosbag real del TurtleBot4, estima la trayectoria con Graph SLAM y ArUco, y genera una grilla de ocupación.
-2. **Parte B — navegación autónoma:** carga un mapa estático, localiza el TurtleBot3 simulado con MCL y landmarks virtuales, planifica con A* y ejecuta el recorrido mediante una máquina de estados.
-3. **Parte C — misión activa:** explora según utilidad informativa, detecta conos rojos con RGB-D/visión monocular y navega hasta una pose segura frente al primer objetivo.
-
-Las partes se ejecutan por separado. Parte B usa por defecto el mapa simulado
-`map_sim.yaml` + `map_sim.pgm`; el mapa `map.yaml` + `map.pgm` de Parte A queda disponible.
-
-## Estructura
-
-```text
-TP-Final-Rob/
-├── mapas/                         # mapa de referencia usado por Parte B
-├── docs/parte_b/                  # implementación, ejecución y resultados
-├── docs/parte_c/                  # arquitectura, ejecución y validación de Parte C
-├── tp_final_ws/
-│   ├── bags/                      # rosbags de Parte A (no versionados)
-│   └── src/
-│       ├── tp_a_slam_aruco/       # Parte A
-│       ├── tp_interfaces/         # mensajes ROS compartidos
-│       ├── tp_platform/           # perfiles y tópicos compartidos TB3/TB4
-│       ├── tp_b_navigation/       # Parte B
-│       ├── tp_c_mission/          # Parte C
-│       └── turtlebot3_custom_simulation/
-└── AGENTS.md                      # contexto técnico para agentes de desarrollo
-```
-
-## Requisitos
-
-- ROS 2 Humble y `colcon`.
-- Parte A: `numpy<2`, GTSAM, PyYAML, OpenCV contrib, SciPy y `cv_bridge`.
-- Partes B/C: Gazebo, TurtleBot3, `cv_bridge` y el paquete de simulación incluido.
-
-Dependencias Python principales:
+Abrir una terminal en la raíz del repositorio. Cambiar solamente
+`ROBOT_NAME` si se usa `tb4_1`. Este bloque compila el workspace y guarda todas
+las variables de la corrida en `/tmp/tb4_lab_env.sh`.
 
 ```bash
-python3 -m pip install "numpy<2" gtsam pyyaml opencv-contrib-python scipy
-```
+# [Notebook — ejecutar desde la raíz del repositorio]
+export ROBOT_NAME=tb4_0
+export REPO_ROOT="$(git rev-parse --show-toplevel)"
+export WS_ROOT="${REPO_ROOT}/tp_final_ws"
+export ROBOT_NS="/${ROBOT_NAME}"
+export TB4_SSH_HOST="${ROBOT_NAME}"
+export RUN_ID="$(date +%Y%m%d-%H%M)-${ROBOT_NAME}"
+export RUN_ROOT="${HOME}/tb4_laboratorio_runs/${RUN_ID}"
+export BAG_DIR="${RUN_ROOT}/acquisition/laberinto"
+export TRAJECTORY_FILE="${RUN_ROOT}/parte_a/trajectory.json"
+export MAP_PREFIX="${RUN_ROOT}/parte_a/map"
+export MAP_YAML="${MAP_PREFIX}.yaml"
+export MAP_PGM="${MAP_PREFIX}.pgm"
+export ODOM_TOPIC="${ROBOT_NS}/odom"
+export SCAN_TOPIC="${ROBOT_NS}/scan"
+export TF_TOPIC="${ROBOT_NS}/tf"
+export TF_STATIC_TOPIC="${ROBOT_NS}/tf_static"
+export RGB_TOPIC="${ROBOT_NS}/oakd/rgb/preview/image_raw"
+export CAMERA_INFO_TOPIC="${ROBOT_NS}/oakd/rgb/preview/camera_info"
+export CMD_VEL_TOPIC="${ROBOT_NS}/cmd_vel"
+export DEPTH_TOPIC=""
 
-## Build
+mkdir -p "${RUN_ROOT}/acquisition" "${RUN_ROOT}/parte_a" \
+  "${RUN_ROOT}/config" "${RUN_ROOT}/logs"
 
-Todos los comandos siguientes parten de la raíz del repositorio clonado:
-
-```bash
+cat > /tmp/tb4_lab_env.sh <<EOF
+export ROBOT_NAME="${ROBOT_NAME}"
+export REPO_ROOT="${REPO_ROOT}"
+export WS_ROOT="${WS_ROOT}"
+export ROBOT_NS="${ROBOT_NS}"
+export TB4_SSH_HOST="${TB4_SSH_HOST}"
+export RUN_ID="${RUN_ID}"
+export RUN_ROOT="${RUN_ROOT}"
+export BAG_DIR="${BAG_DIR}"
+export TRAJECTORY_FILE="${TRAJECTORY_FILE}"
+export MAP_PREFIX="${MAP_PREFIX}"
+export MAP_YAML="${MAP_YAML}"
+export MAP_PGM="${MAP_PGM}"
+export ODOM_TOPIC="${ODOM_TOPIC}"
+export SCAN_TOPIC="${SCAN_TOPIC}"
+export TF_TOPIC="${TF_TOPIC}"
+export TF_STATIC_TOPIC="${TF_STATIC_TOPIC}"
+export RGB_TOPIC="${RGB_TOPIC}"
+export CAMERA_INFO_TOPIC="${CAMERA_INFO_TOPIC}"
+export CMD_VEL_TOPIC="${CMD_VEL_TOPIC}"
+export DEPTH_TOPIC=""
 source "${HOME}/miniforge3/etc/profile.d/conda.sh"
 conda activate rosenv_mf
+source "${WS_ROOT}/install/setup.bash"
+EOF
 
-# Sólo después de los renombres históricos, quitar productos obsoletos:
-rm -rf tp_final_ws/build/tp_slam_interfaces \
-  tp_final_ws/build/tp_slam_aruco \
-  tp_final_ws/install/tp_slam_interfaces \
-  tp_final_ws/install/tp_slam_aruco
-
-cd tp_final_ws
+source "${HOME}/miniforge3/etc/profile.d/conda.sh"
+conda activate rosenv_mf
+cd "${WS_ROOT}"
 colcon build --packages-select tp_platform tp_interfaces tp_a_slam_aruco \
-  tp_b_navigation tp_c_mission turtlebot3_custom_simulation
-source install/setup.bash        # bash
-# source install/setup.zsh       # zsh
+  tp_b_navigation tp_c_mission
+source install/setup.bash
+echo "RUN_ID=${RUN_ID}"
+echo "Artefactos: ${RUN_ROOT}"
 ```
 
-Durante el build, el mapa de `mapas/` se copia al directorio instalado de `tp_b_navigation`. Los launch lo encuentran mediante el índice de paquetes de ROS; no dependen de la ubicación del clon.
-
-## Parte A — generar el mapa
-
-La opción implementada usa dos reproducciones del rosbag.
-
-### Primera pasada: ArUco + Graph SLAM
-
-Terminal 1, desde `tp_final_ws/`:
+En **cada terminal nueva de la notebook**, comenzar con una sola línea:
 
 ```bash
-source install/setup.bash
-ros2 bag play bags/laberinto --clock
+source /tmp/tb4_lab_env.sh
 ```
 
-Terminal 2:
+## 2. Preflight: red, sensores y parada
+
+No iniciar drivers desde la notebook: se usan los drivers que ya corren en el
+TB4. Confirmar que el namespace seleccionado tiene datos.
 
 ```bash
-source install/setup.bash
+# [Notebook]
+source /tmp/tb4_lab_env.sh
+
+ros2 topic echo --once "${ODOM_TOPIC}" nav_msgs/msg/Odometry
+ros2 topic echo --once "${SCAN_TOPIC}" sensor_msgs/msg/LaserScan
+ros2 topic echo --once "${RGB_TOPIC}" sensor_msgs/msg/Image
+ros2 topic echo --once "${CAMERA_INFO_TOPIC}" sensor_msgs/msg/CameraInfo
+ros2 topic echo --once "${TF_TOPIC}" tf2_msgs/msg/TFMessage
+ros2 topic echo --once "${TF_STATIC_TOPIC}" tf2_msgs/msg/TFMessage
+ros2 topic info "${CMD_VEL_TOPIC}" -v
+ros2 topic pub --once "${CMD_VEL_TOPIC}" geometry_msgs/msg/Twist '{}'
+```
+
+**No seguir** si falta algún sensor o TF, si aparecen tópicos del otro TB4, si
+hay un publisher de velocidad inesperado o si no funciona la parada manual.
+
+## 3. Grabar el bag en el TB4
+
+El bag se graba onboard para no depender del transporte de RGB por Wi-Fi. El
+siguiente comando crea la carpeta remota y comienza a grabar. Mantener esta
+terminal abierta durante el recorrido.
+
+```bash
+# [Notebook — Terminal de grabación]
+source /tmp/tb4_lab_env.sh
+
+ssh "${TB4_SSH_HOST}" \
+  "mkdir -p tb4_laboratorio_runs/${RUN_ID}/acquisition"
+
+ssh -t "${TB4_SSH_HOST}" "bash -lc 'source /opt/ros/humble/setup.bash && ros2 bag record \
+  ${ODOM_TOPIC} \
+  ${SCAN_TOPIC} \
+  ${RGB_TOPIC} \
+  ${CAMERA_INFO_TOPIC} \
+  ${TF_TOPIC} \
+  ${TF_STATIC_TOPIC} \
+  ${ROBOT_NS}/imu \
+  -o tb4_laboratorio_runs/${RUN_ID}/acquisition/laberinto'"
+```
+
+Teleoperar a velocidad reducida, cubrir el laberinto y reobservar los ArUco.
+Detener físicamente el robot y recién entonces presionar `Ctrl+C`. Esperar a
+que rosbag cierre `metadata.yaml`.
+
+```bash
+# [Notebook — validar y copiar el bag]
+source /tmp/tb4_lab_env.sh
+
+ssh "${TB4_SSH_HOST}" \
+  "test -s tb4_laboratorio_runs/${RUN_ID}/acquisition/laberinto/metadata.yaml"
+
+mkdir -p "${BAG_DIR}"
+rsync -av --progress \
+  "${TB4_SSH_HOST}:tb4_laboratorio_runs/${RUN_ID}/acquisition/laberinto/" \
+  "${BAG_DIR}/"
+
+ros2 bag info "${BAG_DIR}" | tee "${RUN_ROOT}/config/bag-info.txt"
+ros2 run tp_a_slam_aruco check_bag_contract "${BAG_DIR}" \
+  --robot-namespace "${ROBOT_NAME}"
+```
+
+**Esperar:** `Parte A bag contract OK`. Si falta un tópico, no ejecutar Parte A.
+
+## 4. Parte A — pasada 1: Graph SLAM
+
+Primero iniciar el launch y después reproducir el bag.
+
+```bash
+# [Notebook — Terminal 1: Graph SLAM]
+source /tmp/tb4_lab_env.sh
+
 ros2 launch tp_a_slam_aruco parte_a_slam.launch.py \
-  robot_namespace:=tb4_0 \
-  run_id:=laberinto-tb4_0 \
-  calibration_file:="$(pwd)/src/tp_a_slam_aruco/config/camera_tb4_0.yaml" \
-  trajectory_file:=/tmp/trayectoria.json \
+  robot_namespace:="${ROBOT_NAME}" \
+  artifact_dir:="${RUN_ROOT}" \
+  run_id:="${RUN_ID}" \
+  trajectory_file:="${TRAJECTORY_FILE}" \
+  use_bag_tf:=true \
+  use_sim_time:=true
+```
+
+```bash
+# [Notebook — Terminal 2: reproducir bag]
+source /tmp/tb4_lab_env.sh
+
+ros2 bag play "${BAG_DIR}" --clock --rate 2.0 --disable-keyboard-controls
+```
+
+Cuando termine el bag, presionar `Ctrl+C` en Terminal 1 para guardar el JSON.
+
+```bash
+# [Notebook — comprobar salida]
+source /tmp/tb4_lab_env.sh
+test -s "${TRAJECTORY_FILE}"
+test -s "${RUN_ROOT}/config/platform-parte-a-slam.yaml"
+```
+
+**Esperar:** trayectoria continua, landmarks razonables y `map -> odom` sin
+saltos severos en RViz. Si el JSON está vacío o la trayectoria diverge, no
+generar el mapa.
+
+## 5. Parte A — pasada 2: mapa
+
+Usar exactamente el mismo bag y `trajectory.json`.
+
+```bash
+# [Notebook — Terminal 1: generar mapa]
+source /tmp/tb4_lab_env.sh
+
+ros2 launch tp_a_slam_aruco parte_a_mapa.launch.py \
+  robot_namespace:="${ROBOT_NAME}" \
+  artifact_dir:="${RUN_ROOT}" \
+  run_id:="${RUN_ID}" \
+  trajectory_file:="${TRAJECTORY_FILE}" \
+  map_output:="${MAP_PREFIX}" \
   use_bag_tf:=true
 ```
 
-Al finalizar con `Ctrl+C`, el nodo guarda `/tmp/trayectoria.json`.
-
-Salidas principales: `/aruco_detections`, `/aruco_base_debug`, `/belief`,
-`/poses_guardadas`, `/trajectory_optimized`, `/landmarks` y TF `map → odom`.
-Los diagnósticos de detección y geometría se guardan por defecto en
-`/tmp/aruco_detections.csv` y `/tmp/aruco_geometry_debug.csv`.
-Para usar el otro robot del laboratorio, cambiar el argumento a
-`robot_namespace:=tb4_1`; los tópicos de odometría, cámara y TF se derivan de
-esa selección salvo que se pasen overrides explícitos.
-
-### Segunda pasada: grilla de ocupación
-
-Terminal 1:
-
 ```bash
-source install/setup.bash
-ros2 bag play bags/laberinto --clock
+# [Notebook — Terminal 2: reproducir bag]
+source /tmp/tb4_lab_env.sh
+
+ros2 bag play "${BAG_DIR}" --clock --rate 2.0 --disable-keyboard-controls
 ```
 
-Terminal 2:
+Cuando termine el bag, presionar `Ctrl+C` en Terminal 1 para exportar el mapa.
 
 ```bash
-source install/setup.bash
-ros2 launch tp_a_slam_aruco parte_a_mapa.launch.py \
-  robot_namespace:=tb4_0 \
-  run_id:=laberinto-tb4_0 \
-  trajectory_file:=/tmp/trayectoria.json \
-  map_output:=/tmp/mapa
+# [Notebook — comprobar salida]
+source /tmp/tb4_lab_env.sh
+test -s "${MAP_YAML}"
+test -s "${MAP_PGM}"
+test -s "${RUN_ROOT}/config/platform-parte-a-mapa.yaml"
 ```
 
-La salida es `/tmp/mapa.pgm` + `/tmp/mapa.yaml`.
+## 6. Inspeccionar el mapa
 
-Para visualizar el mapa generado en RViz, podés cargarlo con `nav2_map_server` y luego abrir RViz:
-
-Terminal 1:
 ```bash
-source install/setup.bash
+# [Notebook — Terminal 1: map server]
+source /tmp/tb4_lab_env.sh
+
 ros2 run nav2_map_server map_server --ros-args \
-  -p yaml_filename:=/tmp/mapa.yaml
+  -p yaml_filename:="${MAP_YAML}"
 ```
 
-Terminal 2:
 ```bash
-source install/setup.bash
+# [Notebook — Terminal 2: activar mapa y abrir RViz]
+source /tmp/tb4_lab_env.sh
+
 ros2 lifecycle set /map_server configure
-
 ros2 lifecycle set /map_server activate
-```
-
-
-```bash
-
-Terminal 3:
-source install/setup.bash
 rviz2
 ```
 
-En RViz2:
+En RViz usar `Fixed Frame: map` y agregar `/map`. **No seguir** si faltan
+paredes, hay paredes dobles severas, se cerraron aberturas transitables o
+aparecen conexiones falsas.
 
-1. Poner `Fixed Frame` en `map`.
-2. Agregar un display `Map` apuntando a `/map`.
-3. Si el mapa no aparece enseguida, cambiar `Durability Policy` a `Transient Local`.
+Cerrar el map server y RViz antes de Parte B.
 
-Para usar un mapa regenerado como default de Parte B, reemplazá `mapas/map.pgm` y `mapas/map.yaml` y repetí `colcon build --packages-select tp_b_navigation`. Para probarlo sin reemplazar archivos, pasalo directamente con `map_yaml:=/tmp/mapa.yaml`.
+## 7. Parte B — localización sin movimiento
 
-## Parte B — navegar dentro del mapa
-
-Parte B se ejecuta en Gazebo. Todos sus nodos usan tiempo simulado.
-
-Terminal 1:
+La primera ejecución remapea la velocidad a `/test/cmd_vel`; no puede comandar
+el robot físico.
 
 ```bash
-source tp_final_ws/install/setup.bash
-ros2 launch turtlebot3_custom_simulation custom_casa.launch.py
-# Para probar obstáculos no mapeados:
-# ros2 launch turtlebot3_custom_simulation custom_casa_obs.launch.py
-```
+# [Notebook — Terminal 1: Parte B segura]
+source /tmp/tb4_lab_env.sh
 
-Terminal 2:
-
-```bash
-source tp_final_ws/install/setup.bash
-ros2 launch tp_b_navigation parte_b.launch.py
-```
-
-En RViz:
-
-1. Usá **2D Pose Estimate** para publicar `/initialpose`.
-2. Usá **2D Goal Pose** para publicar `/goal_pose`.
-3. El sistema localiza con MCL, publica `/plan`, sigue el recorrido, evita obstáculos nuevos y alcanza la orientación final.
-
-Nodos de Parte B:
-
-- `map_loader`
-- `landmark_publisher`
-- `landmark_sensor`
-- `mcl_localization`
-- `global_planner`
-- `obstacle_monitor`
-- `state_machine`
-
-Perfil real TB4, usando mapa y landmarks de Parte A:
-
-```bash
-source tp_final_ws/install/setup.bash
 ros2 launch tp_b_navigation parte_b.launch.py \
   profile:=real_tb4 \
-  robot_namespace:=tb4_0 \
-  map_yaml:=/tmp/mapa.yaml \
-  landmark_map_file:=/tmp/trayectoria.json
+  robot_namespace:="${ROBOT_NAME}" \
+  artifact_dir:="${RUN_ROOT}" \
+  run_id:="${RUN_ID}" \
+  map_yaml:="${MAP_YAML}" \
+  landmark_map_file:="${TRAJECTORY_FILE}" \
+  cmd_vel_topic:=/test/cmd_vel \
+  enable_safety_gates:=true
 ```
 
-En `real_tb4`, Parte B agrega `aruco_detector` y `aruco_mcl_adapter`, no levanta
-`landmark_publisher` ni `landmark_sensor`, y activa gates de seguridad por pose
-MCL, covarianza, TF y scan stale antes de mover o insertar obstáculos dinámicos.
-
-La guía detallada, incluido el setup alternativo para RoboStack/macOS, está en [`docs/parte_b/02_guia_ejecucion.md`](docs/parte_b/02_guia_ejecucion.md).
-
-## Parte C — explorar y buscar el cono rojo
-
-Simulación completa, con `world:=casa` o `world:=casa_obs`:
+En RViz publicar una pose inicial con **2D Pose Estimate**. Verificar:
 
 ```bash
-source tp_final_ws/install/setup.bash
-ros2 launch tp_c_mission parte_c_sim.launch.py world:=casa
+# [Notebook — Terminal 2: checks B1]
+source /tmp/tb4_lab_env.sh
+
+ros2 topic echo --once /mcl_pose
+ros2 topic echo --once /obstacle_monitor_healthy std_msgs/msg/Bool
+ros2 node info /state_machine
+ros2 topic info "${CMD_VEL_TOPIC}" -v
 ```
 
-Después de fijar `/initialpose`, iniciar la misión autónoma:
+**Esperar:** nube concentrada, MCL fresco, monitor `true`, `/test/cmd_vel` en
+`state_machine` y ningún publisher nuevo sobre `${CMD_VEL_TOPIC}`.
+
+## 8. Parte B — un goal corto
+
+Detener el launch anterior con `Ctrl+C`, confirmar que el robot está quieto y
+probar nuevamente la parada manual.
+
+```bash
+# [Notebook — publicar cero antes de habilitar movimiento]
+source /tmp/tb4_lab_env.sh
+ros2 topic pub --once "${CMD_VEL_TOPIC}" geometry_msgs/msg/Twist '{}'
+```
+
+```bash
+# [Notebook — Terminal 1: Parte B con salida física]
+source /tmp/tb4_lab_env.sh
+
+ros2 launch tp_b_navigation parte_b.launch.py \
+  profile:=real_tb4 \
+  robot_namespace:="${ROBOT_NAME}" \
+  artifact_dir:="${RUN_ROOT}" \
+  run_id:="${RUN_ID}" \
+  map_yaml:="${MAP_YAML}" \
+  landmark_map_file:="${TRAJECTORY_FILE}" \
+  cmd_vel_topic:="${CMD_VEL_TOPIC}" \
+  enable_safety_gates:=true
+```
+
+Publicar nuevamente la pose inicial y enviar primero un único **2D Goal Pose**
+cercano, libre y despejado. Mantener la parada accesible. No probar múltiples
+goals ni obstáculos hasta que este recorrido sea seguro.
+
+## 9. Parte C — RGB-D y misión
+
+Detener Parte B, publicar velocidad cero y mantener el robot quieto. Buscar los
+tópicos depth disponibles:
+
+```bash
+# [Notebook — identificar depth alineado]
+source /tmp/tb4_lab_env.sh
+
+ros2 topic pub --once "${CMD_VEL_TOPIC}" geometry_msgs/msg/Twist '{}'
+ros2 topic list | grep -i depth
+ros2 topic list | grep -E 'stereo|aligned'
+```
+
+Definir el tópico que corresponda a **depth métrico alineado con el RGB**. Esta
+es la única línea que debe completarse durante el laboratorio:
+
+```bash
+# [Notebook — reemplazar por el tópico alineado real]
+export DEPTH_TOPIC="/${ROBOT_NAME}/RUTA/DEPTH_ALINEADO"
+printf 'export DEPTH_TOPIC=%q\n' "${DEPTH_TOPIC}" >> /tmp/tb4_lab_env.sh
+
+ros2 topic echo --once "${RGB_TOPIC}" sensor_msgs/msg/Image \
+  | grep -E 'height:|width:|encoding:'
+ros2 topic echo --once "${DEPTH_TOPIC}" sensor_msgs/msg/Image \
+  | grep -E 'height:|width:|encoding:'
+```
+
+RGB y depth deben tener las mismas dimensiones, timestamps frescos y el mismo
+campo visual. **No lanzar Parte C** si no se puede demostrar la alineación.
+
+```bash
+# [Notebook — Terminal 1: Parte C real]
+source /tmp/tb4_lab_env.sh
+
+ros2 launch tp_c_mission parte_c_real.launch.py \
+  profile:=real_tb4 \
+  robot_namespace:="${ROBOT_NAME}" \
+  artifact_dir:="${RUN_ROOT}" \
+  run_id:="${RUN_ID}" \
+  map_yaml:="${MAP_YAML}" \
+  landmark_map_file:="${TRAJECTORY_FILE}" \
+  depth_topic:="${DEPTH_TOPIC}" \
+  enable_safety_gates:=true
+```
+
+Antes de iniciar la misión:
+
+```bash
+# [Notebook — Terminal 2: readiness y control de misión]
+source /tmp/tb4_lab_env.sh
+
+ros2 topic echo --once /red_cone/vision_ready std_msgs/msg/Bool
+ros2 topic echo --once /mcl_pose
+ros2 topic echo --once /obstacle_monitor_healthy std_msgs/msg/Bool
+```
+
+**Esperar:** `vision_ready: true`, MCL fresco y monitor saludable. Sólo entonces:
 
 ```bash
 ros2 service call /mission/start std_srvs/srv/Trigger '{}'
 ros2 topic echo /mission/status
 ```
 
-Para calibrar percepción con el rosbag de visión:
+Cancelar ante cualquier pérdida de MCL, scan, visión, TF o monitor:
 
 ```bash
-ros2 bag play /ruta/al/bag_vision --clock
-ros2 launch tp_c_mission parte_c_bag.launch.py \
-  robot_namespace:=tb4_0 \
-  depth_topic:=/topico/depth_alineado
+ros2 service call /mission/cancel std_srvs/srv/Trigger '{}'
+ros2 topic pub --once "${CMD_VEL_TOPIC}" geometry_msgs/msg/Twist '{}'
 ```
 
-El despliegue real requiere el mapa y el JSON de trayectoria/landmarks de Parte A:
+## 10. Parada y artefactos
+
+Al terminar cualquier prueba con movimiento:
 
 ```bash
-ros2 launch tp_c_mission parte_c_real.launch.py \
-  robot_namespace:=tb4_0 \
-  map_yaml:=/tmp/mapa.yaml \
-  landmark_map_file:=/tmp/trayectoria.json \
-  depth_topic:=/topico/depth_alineado \
-  enable_safety_gates:=true
+# [Notebook]
+source /tmp/tb4_lab_env.sh
+
+ros2 service call /mission/cancel std_srvs/srv/Trigger '{}' || true
+ros2 topic pub --once "${CMD_VEL_TOPIC}" geometry_msgs/msg/Twist '{}'
+ros2 topic info "${CMD_VEL_TOPIC}" -v
+find "${RUN_ROOT}" -maxdepth 3 -type f | sort \
+  | tee "${RUN_ROOT}/artifact-manifest.txt"
 ```
 
-En el perfil real, `/mission/start` exige mapa, pose MCL fresca y visión lista.
-Si durante la misión se vence MCL, sube la covarianza o se pierde visión/TF de
-cámara, `mission_manager` publica cancelación y deja `/mission/status` en
-`FAILED`.
+Conservar como mínimo:
 
-La arquitectura, los parámetros y las condiciones de aceptación están en
-[`docs/parte_c/README.md`](docs/parte_c/README.md).
-
-## Tests
-
-Con el entorno ROS cargado:
-
-```bash
-python3 -m pytest tp_final_ws/src/tp_a_slam_aruco/test -q
-python3 -m pytest tp_final_ws/src/tp_b_navigation/test -q
-python3 -m pytest tp_final_ws/src/tp_c_mission/test -q
+```text
+acquisition/laberinto/
+config/platform-parte-a-slam.yaml
+config/platform-parte-a-mapa.yaml
+config/platform-parte-b.yaml
+config/platform-parte-c.yaml
+parte_a/trajectory.json
+parte_a/map.yaml
+parte_a/map.pgm
+logs y capturas de los gates realizados
 ```
 
-Los smoke tests con rosbag son opt-in, usan un `ROS_DOMAIN_ID` aislado,
-redireccionan `/cmd_vel` a `/test/cmd_vel` y terminan todos los grupos de
-procesos con SIGINT/SIGTERM:
-
-```bash
-RUN_ROS_SMOKE=1 \
-TP_TB4_TEST_BAG="$(pwd)/tp_final_ws/bags/laberinto" \
-TP_TB4_CONE_TEST_BAG="$(pwd)/tp_final_ws/bags/laberinto_conos" \
-python3 -m pytest \
-  tp_final_ws/src/tp_a_slam_aruco/test/test_ros_smoke.py \
-  tp_final_ws/src/tp_b_navigation/test/test_real_profile_smoke.py \
-  tp_final_ws/src/tp_c_mission/test/test_real_mission_smoke.py -q
-```
-
-Sin esas variables, los smokes se omiten. Nunca deben ejecutarse apuntando al
-dominio ROS de un robot físico en movimiento.
-
-## Contratos importantes
-
-- Parte A y las misiones B/C no deben lanzarse simultáneamente.
-- Ambas etapas pueden publicar `map → odom`, pero en ejecuciones diferentes.
-- `/landmarks` tiene contratos distintos: ArUco optimizados en Parte A y landmarks virtuales conocidos en Parte B.
-- `state_machine` es el único nodo de Parte B autorizado a publicar `/cmd_vel`.
-- En Parte C, MCL consume observaciones ArUco identificadas y sigue siendo el único productor de `map → odom`.
-- `tp_c_mission` no publica `/cmd_vel`; sólo envía `/mission_goal` y cancelaciones a `state_machine`.
-- Los obstáculos dinámicos conservan evasión reactiva; no se incorporan al A* estático.
-- Para usar un mapa alternativo: `ros2 launch tp_b_navigation parte_b.launch.py map_yaml:=/ruta/map.yaml`.
+No afirmar que B1–B3 o C1–C3 están aprobados hasta completar y registrar las
+pruebas sobre el TurtleBot4 físico.
