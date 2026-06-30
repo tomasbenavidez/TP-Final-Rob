@@ -92,7 +92,7 @@ frames, fuentes de datos, parámetros físicos y nodos habilitados.
 Se realizarán, como cambios puramente estructurales:
 
 - el paquete heredado de interfaces de SLAM → `tp_interfaces`;
-- `tp_slam_aruco` → `tp_a_slam_aruco`.
+- el paquete heredado de SLAM de Parte A → `tp_a_slam_aruco`.
 
 El primer paquete seguirá separado porque contiene mensajes compartidos por los
 productores de observaciones reales y MCL. El nombre nuevo refleja que no son

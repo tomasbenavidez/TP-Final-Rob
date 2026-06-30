@@ -19,7 +19,7 @@ TP-Final-Rob/
 ├── tp_final_ws/
 │   ├── bags/                      # rosbags de Parte A (no versionados)
 │   └── src/
-│       ├── tp_slam_aruco/         # Parte A
+│       ├── tp_a_slam_aruco/       # Parte A
 │       ├── tp_interfaces/         # mensajes ROS compartidos
 │       ├── tp_b_navigation/       # Parte B
 │       ├── tp_c_mission/          # Parte C
@@ -45,7 +45,7 @@ Todos los comandos siguientes parten de la raíz del repositorio clonado:
 
 ```bash
 cd tp_final_ws
-colcon build --packages-select tp_interfaces tp_slam_aruco \
+colcon build --packages-select tp_interfaces tp_a_slam_aruco \
   tp_b_navigation tp_c_mission turtlebot3_custom_simulation
 source install/setup.bash        # bash
 # source install/setup.zsh       # zsh
@@ -70,8 +70,8 @@ Terminal 2:
 
 ```bash
 source install/setup.bash
-ros2 launch tp_slam_aruco parte_a_slam.launch.py \
-  calibration_file:="$(pwd)/src/tp_slam_aruco/config/camera_tb4_0.yaml" \
+ros2 launch tp_a_slam_aruco parte_a_slam.launch.py \
+  calibration_file:="$(pwd)/src/tp_a_slam_aruco/config/camera_tb4_0.yaml" \
   trajectory_file:=/tmp/trayectoria.json \
   use_bag_tf:=true
 ```
@@ -96,7 +96,7 @@ Terminal 2:
 
 ```bash
 source install/setup.bash
-ros2 launch tp_slam_aruco parte_a_mapa.launch.py \
+ros2 launch tp_a_slam_aruco parte_a_mapa.launch.py \
   trajectory_file:=/tmp/trayectoria.json \
   map_output:=/tmp/mapa
 ```
@@ -215,7 +215,7 @@ La arquitectura, los parámetros y las condiciones de aceptación están en
 Con el entorno ROS cargado:
 
 ```bash
-python3 -m pytest tp_final_ws/src/tp_slam_aruco/test -q
+python3 -m pytest tp_final_ws/src/tp_a_slam_aruco/test -q
 python3 -m pytest tp_final_ws/src/tp_b_navigation/test -q
 python3 -m pytest tp_final_ws/src/tp_c_mission/test -q
 ```
@@ -223,7 +223,7 @@ python3 -m pytest tp_final_ws/src/tp_c_mission/test -q
 El smoke test de Parte A con rosbag se habilita explícitamente:
 
 ```bash
-RUN_ROS_SMOKE=1 python3 -m pytest tp_final_ws/src/tp_slam_aruco/test/test_ros_smoke.py -q
+RUN_ROS_SMOKE=1 python3 -m pytest tp_final_ws/src/tp_a_slam_aruco/test/test_ros_smoke.py -q
 ```
 
 ## Contratos importantes

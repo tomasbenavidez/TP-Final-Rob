@@ -16,7 +16,7 @@ La integración normal es secuencial: Parte A produce `map.yaml` + `map.pgm`; Pa
 mapas/                              mapa estático de referencia
 docs/parte_b/                       documentación y resultados de Parte B
 docs/parte_c/                       documentación y ejecución de Parte C
-tp_final_ws/src/tp_slam_aruco/      paquete de Parte A
+tp_final_ws/src/tp_a_slam_aruco/    paquete de Parte A
 tp_final_ws/src/tp_interfaces/      mensajes ROS propios
 tp_final_ws/src/tp_b_navigation/    paquete de Parte B
 tp_final_ws/src/tp_c_mission/       percepción y supervisor de Parte C
@@ -98,7 +98,7 @@ Desde la raíz del repositorio:
 
 ```bash
 cd tp_final_ws
-colcon build --packages-select tp_interfaces tp_slam_aruco \
+colcon build --packages-select tp_interfaces tp_a_slam_aruco \
   tp_b_navigation tp_c_mission turtlebot3_custom_simulation
 source install/setup.bash
 ```
@@ -107,8 +107,8 @@ Parte A:
 
 ```bash
 ros2 bag play bags/laberinto --clock
-ros2 launch tp_slam_aruco parte_a_slam.launch.py \
-  calibration_file:="$(pwd)/src/tp_slam_aruco/config/camera_tb4_0.yaml" \
+ros2 launch tp_a_slam_aruco parte_a_slam.launch.py \
+  calibration_file:="$(pwd)/src/tp_a_slam_aruco/config/camera_tb4_0.yaml" \
   trajectory_file:=/tmp/trayectoria.json use_bag_tf:=true
 ```
 
@@ -133,7 +133,7 @@ Para RoboStack/macOS se puede usar `source docs/parte_b/scripts/setup_parte_b.sh
 
 ```bash
 python3 tp_final_ws/src/tp_b_navigation/test/test_portable_paths.py -v
-python3 -m compileall -q tp_final_ws/src/tp_b_navigation tp_final_ws/src/tp_slam_aruco tp_final_ws/src/tp_c_mission
+python3 -m compileall -q tp_final_ws/src/tp_b_navigation tp_final_ws/src/tp_a_slam_aruco tp_final_ws/src/tp_c_mission
 git diff --check
 ```
 
@@ -141,10 +141,10 @@ Con ROS 2 disponible, ejecutar además:
 
 ```bash
 cd tp_final_ws
-colcon build --packages-select tp_interfaces tp_slam_aruco \
+colcon build --packages-select tp_interfaces tp_a_slam_aruco \
   tp_b_navigation tp_c_mission turtlebot3_custom_simulation
 source install/setup.bash
-python3 -m pytest src/tp_slam_aruco/test src/tp_b_navigation/test src/tp_c_mission/test -q
+python3 -m pytest src/tp_a_slam_aruco/test src/tp_b_navigation/test src/tp_c_mission/test -q
 ```
 
 ## Límites de modificación

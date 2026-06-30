@@ -50,7 +50,7 @@ def generate_launch_description():
              parameters=[{'base_frame': base_frame}], remappings=common_remaps),
         Node(package='tp_b_navigation', executable='state_machine', output='screen',
              parameters=[{'base_frame': base_frame}], remappings=common_remaps),
-        Node(package='tp_slam_aruco', executable='aruco_detector', output='screen',
+        Node(package='tp_a_slam_aruco', executable='aruco_detector', output='screen',
              parameters=[{'image_topic': rgb, 'camera_frame': ''}]),
         Node(package='tp_c_mission', executable='aruco_mcl_adapter', output='screen',
              parameters=[{'base_frame': base_frame}]),

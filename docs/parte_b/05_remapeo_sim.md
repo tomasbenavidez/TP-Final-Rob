@@ -14,7 +14,7 @@ se **repite el mapeo en simulación**: mismo algoritmo, datos de Gazebo.
 ## El nodo `sim_mapper` (reusa el mapeo de Parte A)
 
 `tp_b_navigation/sim_mapper.py` **porta el núcleo de `occupancy_grid_node` de Parte A**
-(`tp_slam_aruco`): modelo de sensor inverso + **log-odds** (mismas constantes `L_OCC=0.85`,
+(`tp_a_slam_aruco`): modelo de sensor inverso + **log-odds** (mismas constantes `L_OCC=0.85`,
 `L_FREE=-0.40`, sat. `±5`) + **Bresenham** + export `.pgm/.yaml` idéntico (umbrales `occ=0.60`,
 `free=0.40`, `negate:0`). Está portado (con atribución) igual que `landmark_sensor` está portado
 de tp5, para que Parte B quede **autocontenida**.

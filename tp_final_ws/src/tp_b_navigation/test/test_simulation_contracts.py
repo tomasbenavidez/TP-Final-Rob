@@ -41,7 +41,7 @@ class SimulationContractsTest(unittest.TestCase):
 
     def test_part_a_exposes_tb4_odometry_default(self):
         launch_dir = (
-            REPO_ROOT / 'tp_final_ws' / 'src' / 'tp_slam_aruco' / 'launch')
+            REPO_ROOT / 'tp_final_ws' / 'src' / 'tp_a_slam_aruco' / 'launch')
         for filename in ('parte_a_slam.launch.py', 'parte_a_mapa.launch.py'):
             source = (launch_dir / filename).read_text()
             self.assertIn("default_value='/tb4_0/odom'", source, filename)

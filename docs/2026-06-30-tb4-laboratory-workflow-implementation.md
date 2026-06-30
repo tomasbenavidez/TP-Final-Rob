@@ -72,7 +72,7 @@ branch-specific section narrows the scope:
 
 ```bash
 python3 tp_final_ws/src/tp_b_navigation/test/test_portable_paths.py -v
-python3 -m compileall -q tp_final_ws/src/tp_b_navigation tp_final_ws/src/tp_slam_aruco tp_final_ws/src/tp_c_mission
+python3 -m compileall -q tp_final_ws/src/tp_b_navigation tp_final_ws/src/tp_a_slam_aruco tp_final_ws/src/tp_c_mission
 git diff --check
 ```
 
@@ -80,10 +80,10 @@ When ROS 2 is available, run:
 
 ```bash
 cd tp_final_ws
-colcon build --packages-select tp_interfaces tp_slam_aruco \
+colcon build --packages-select tp_interfaces tp_a_slam_aruco \
   tp_b_navigation tp_c_mission turtlebot3_custom_simulation
 source install/setup.bash
-python3 -m pytest src/tp_slam_aruco/test src/tp_b_navigation/test src/tp_c_mission/test -q
+python3 -m pytest src/tp_a_slam_aruco/test src/tp_b_navigation/test src/tp_c_mission/test -q
 ```
 
 For rename branches, update the package names in the ROS validation command to
@@ -177,7 +177,7 @@ mechanically.
 
 ```bash
 rg -n "tp_slam"_interfaces tp_final_ws docs README.md
-python3 -m compileall -q tp_final_ws/src/tp_slam_aruco tp_final_ws/src/tp_b_navigation tp_final_ws/src/tp_c_mission
+python3 -m compileall -q tp_final_ws/src/tp_a_slam_aruco tp_final_ws/src/tp_b_navigation tp_final_ws/src/tp_c_mission
 git diff --check
 ```
 
@@ -185,9 +185,9 @@ With ROS 2:
 
 ```bash
 cd tp_final_ws
-colcon build --packages-select tp_interfaces tp_slam_aruco tp_b_navigation tp_c_mission
+colcon build --packages-select tp_interfaces tp_a_slam_aruco tp_b_navigation tp_c_mission
 source install/setup.bash
-python3 -m pytest src/tp_slam_aruco/test src/tp_b_navigation/test src/tp_c_mission/test -q
+python3 -m pytest src/tp_a_slam_aruco/test src/tp_b_navigation/test src/tp_c_mission/test -q
 ```
 
 **Ready when:**
@@ -204,7 +204,8 @@ git commit -m "chore: rename shared interfaces package"
 
 ## Task 3: `chore/rename-parte-a-package`
 
-**Objective:** Rename `tp_slam_aruco` to `tp_a_slam_aruco` mechanically.
+**Objective:** Rename the legacy Parte A SLAM package to `tp_a_slam_aruco`
+mechanically.
 
 **Scope:**
 
@@ -230,7 +231,7 @@ git commit -m "chore: rename shared interfaces package"
 **Validation:**
 
 ```bash
-rg -n "tp_slam_aruco" tp_final_ws docs README.md
+rg -n "tp_slam"_aruco tp_final_ws docs README.md
 python3 -m compileall -q tp_final_ws/src/tp_a_slam_aruco tp_final_ws/src/tp_b_navigation tp_final_ws/src/tp_c_mission
 git diff --check
 ```
@@ -248,7 +249,7 @@ python3 -m pytest src/tp_a_slam_aruco/test src/tp_b_navigation/test src/tp_c_mis
 
 - `ros2 launch tp_a_slam_aruco parte_a_slam.launch.py --show-args` works.
 - `ros2 launch tp_a_slam_aruco parte_a_mapa.launch.py --show-args` works.
-- No live code imports or launch references use `tp_slam_aruco`.
+- No live code imports or launch references use the legacy package name.
 
 **Expected commit:**
 

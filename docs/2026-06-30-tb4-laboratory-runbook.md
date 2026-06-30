@@ -15,7 +15,7 @@ paquetes, mensajes, parametros ni algoritmos.
   una rama futura. En este borrador, cada comando usa `ROBOT_NS` como entrada
   de la sesion y marca las excepciones donde el codigo actual sigue teniendo
   defaults orientados a `tb4_0`.
-- `ros2 run tp_slam_aruco check_bag_contract` existe, pero actualmente valida
+- `ros2 run tp_a_slam_aruco check_bag_contract` existe, pero actualmente valida
   un contrato fijo `/tb4_0/*`. No usarlo como verificador final para `tb4_1`
   hasta que la rama de namespace soporte un argumento de namespace.
 - Parte B real aun no tiene un perfil final separado. No lanzar
@@ -89,7 +89,7 @@ drivers del robot desde la notebook.
 [Notebook laboratorio]
 cd /ruta/al/checkout/TP-Final-Rob
 cd tp_final_ws
-colcon build --packages-select tp_interfaces tp_slam_aruco \
+colcon build --packages-select tp_interfaces tp_a_slam_aruco \
   tp_b_navigation tp_c_mission turtlebot3_custom_simulation
 source install/setup.bash
 ```
@@ -285,7 +285,7 @@ pero no reemplaza el chequeo por `ROBOT_NS` anterior.
 ```bash
 [Notebook laboratorio]
 if [ "${ROBOT_NAME}" = "tb4_0" ]; then
-  ros2 run tp_slam_aruco check_bag_contract "${BAG_DIR}"
+  ros2 run tp_a_slam_aruco check_bag_contract "${BAG_DIR}"
 else
   echo "check_bag_contract actual valida /tb4_0; usar solo el chequeo por ROBOT_NS."
 fi
@@ -325,7 +325,7 @@ Terminal 2:
 [Notebook laboratorio]
 cd /ruta/al/checkout/TP-Final-Rob/tp_final_ws
 source install/setup.bash
-ros2 launch tp_slam_aruco parte_a_slam.launch.py \
+ros2 launch tp_a_slam_aruco parte_a_slam.launch.py \
   odom_topic:="${ODOM_TOPIC}" \
   bag_tf_topic:="${TF_TOPIC}" \
   bag_tf_static_topic:="${TF_STATIC_TOPIC}" \
@@ -380,7 +380,7 @@ Terminal 2:
 [Notebook laboratorio]
 cd /ruta/al/checkout/TP-Final-Rob/tp_final_ws
 source install/setup.bash
-ros2 launch tp_slam_aruco parte_a_mapa.launch.py \
+ros2 launch tp_a_slam_aruco parte_a_mapa.launch.py \
   trajectory_file:="${TRAJECTORY_FILE}" \
   odom_topic:="${ODOM_TOPIC}" \
   map_output:="${MAP_PREFIX}"

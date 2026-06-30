@@ -7,7 +7,7 @@ ocupación a partir del rosbag del TurtleBot4 (mundo real); este nodo **repite e
 mismo proceso de mapeo en Gazebo** para producir el mapa del entorno simulado que
 después consume Parte B (planner + MCL).
 
-Reusa el algoritmo de `tp_slam_aruco/occupancy_grid_node.py` (Parte A):
+Reusa el algoritmo de `tp_a_slam_aruco/occupancy_grid_node.py` (Parte A):
 modelo de sensor inverso + log-odds + Bresenham + export .pgm/.yaml (mismas
 constantes y umbrales, ver _L_OCC/_L_FREE y _PGM_*). El core está PORTADO acá
 (igual que `landmark_sensor` está portado de tp5) para mantener Parte B
@@ -51,7 +51,7 @@ _L_MAX = 5.0
 
 
 def world_to_grid(wx, wy, origin_x, origin_y, resolution):
-    """Portado de tp_slam_aruco/slam_mapping.py (Parte A)."""
+    """Portado de tp_a_slam_aruco/slam_mapping.py (Parte A)."""
     gx = math.floor((wx - origin_x) / resolution + 1e-9)
     gy = math.floor((wy - origin_y) / resolution + 1e-9)
     return gx, gy

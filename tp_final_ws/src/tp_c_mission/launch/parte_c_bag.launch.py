@@ -40,7 +40,7 @@ def generate_launch_description():
                 'camera_info_topic': LaunchConfiguration('camera_info_topic'),
             }]),
         Node(
-            package='tp_slam_aruco', executable='tf_bridge', output='screen',
+            package='tp_a_slam_aruco', executable='tf_bridge', output='screen',
             parameters=[{'use_sim_time': True}]),
         Node(
             package='rviz2', executable='rviz2', name='rviz2',

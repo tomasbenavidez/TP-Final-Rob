@@ -28,7 +28,7 @@ Linux:
 ```bash
 cd tp_final_ws
 colcon build --packages-select \
-  tp_interfaces tp_slam_aruco tp_b_navigation \
+  tp_interfaces tp_a_slam_aruco tp_b_navigation \
   tp_c_mission turtlebot3_custom_simulation
 source install/setup.bash
 ```
@@ -39,7 +39,7 @@ macOS/RoboStack:
 rosenv
 cd tp_final_ws
 colcon build --packages-select \
-  tp_interfaces tp_slam_aruco tp_b_navigation \
+  tp_interfaces tp_a_slam_aruco tp_b_navigation \
   tp_c_mission turtlebot3_custom_simulation
 source install/setup.zsh
 ```
@@ -55,7 +55,7 @@ Para reconstruir `tp_interfaces` desde cero, abrí una terminal nueva, ejecutá
 cd tp_final_ws
 rm -rf build/tp_interfaces install/tp_interfaces
 colcon build --packages-select \
-  tp_interfaces tp_slam_aruco tp_b_navigation \
+  tp_interfaces tp_a_slam_aruco tp_b_navigation \
   tp_c_mission turtlebot3_custom_simulation \
   --cmake-args -DPython3_EXECUTABLE="$CONDA_PREFIX/bin/python3"
 source install/setup.zsh
