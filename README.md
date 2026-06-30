@@ -118,6 +118,34 @@ ros2 topic pub --once "${CMD_VEL_TOPIC}" geometry_msgs/msg/Twist '{}'
 **No seguir** si falta algún sensor o TF, si aparecen tópicos del otro TB4, si
 hay un publisher de velocidad inesperado o si no funciona la parada manual.
 
+Para Parte C real, chequear además si la OAK-D publica depth. Esto no es
+necesario para Parte A/B, pero sí para que el detector de cono pueda estimar la
+posición del cono en `map`.
+
+```bash
+# [Notebook — buscar depth para Parte C]
+source /tmp/tb4_lab_env.sh
+
+ros2 topic list | grep -Ei 'oak|depth|stereo|disparity|aligned|image_raw|camera_info'
+```
+
+Si aparece un tópico candidato de depth alineado al RGB, definirlo y confirmar
+que publica una imagen con dimensiones compatibles:
+
+```bash
+# [Notebook — reemplazar por el tópico real encontrado]
+export DEPTH_TOPIC="/${ROBOT_NAME}/RUTA/DEPTH_ALINEADO"
+printf 'export DEPTH_TOPIC=%q\n' "${DEPTH_TOPIC}" >> /tmp/tb4_lab_env.sh
+
+ros2 topic echo --once "${RGB_TOPIC}" sensor_msgs/msg/Image \
+  | grep -E 'height:|width:|encoding:'
+ros2 topic echo --once "${DEPTH_TOPIC}" sensor_msgs/msg/Image \
+  | grep -E 'height:|width:|encoding:'
+```
+
+Si no aparece ningún tópico de depth, continuar con Parte A/B pero no iniciar
+Parte C real: `vision_ready` debe quedar en `false` hasta tener RGB-D alineado.
+
 ## 3. Grabar el bag en el TB4
 
 El bag se graba onboard para no depender del transporte de RGB por Wi-Fi. El
