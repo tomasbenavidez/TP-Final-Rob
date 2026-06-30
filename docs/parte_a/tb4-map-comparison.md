@@ -58,3 +58,16 @@ activarlo por defecto.
 Para una comparación bit a bit de transporte, repetir a `--rate 1.0` o con un
 reproductor offline; la evidencia actual sí valida el contrato de bracketing,
 TF/fallback, cierre de cola y equivalencia geométrica de las dos variantes.
+
+## Gates A1–A3 del bag conocido
+
+| Gate | Evidencia local | Estado |
+|---|---|---|
+| A1 | 42 landmarks; TF real en 10 769/10 770 y 10 782/10 783 integraciones; un fallback documentado por corrida | Verificado para este bag |
+| A2 | 287 poses optimizadas; trayectoria y landmarks exportados | Datos verificados; inspección/captura de suavidad pendiente |
+| A3 | Mapas cargables, aberturas principales abiertas, sin conexiones falsas nuevas ni paredes dobles severas | Verificado para este bag |
+
+Los artefactos “sin gate angular” y “gate 0.35 rad/s” constituyen,
+respectivamente, la comparación baseline y bracketed registrada. Esta
+validación no aprueba un mapa adquirido en otra fecha ni reemplaza la
+inspección física del escenario y del `RUN_ID`.

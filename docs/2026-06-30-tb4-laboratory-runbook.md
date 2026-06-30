@@ -1,7 +1,8 @@
 # Runbook final de laboratorio TB4
 
-**Estado:** procedimiento final ejecutable. Las validaciones B2/B3 y C1/C2/C3
-requieren el TurtleBot4 fisico y se registran como checkpoints manuales.
+**Estado:** procedimiento final ejecutable. La preparación local y con bags
+está verificada; B1–B3 y C1–C3 requieren un TurtleBot4 físico y permanecen
+pendientes hasta registrar evidencia en el laboratorio.
 
 **Alcance:** flujo real de laboratorio con TurtleBot4, desde una sesion limpia
 hasta la retencion de artefactos. Los launch files aceptan `robot_namespace`
@@ -44,7 +45,10 @@ export TRAJECTORY_FILE="${RUN_ROOT}/parte_a/trajectory.json"
 export MAP_PREFIX="${RUN_ROOT}/parte_a/map"
 export MAP_YAML="${MAP_PREFIX}.yaml"
 export MAP_PGM="${MAP_PREFIX}.pgm"
-export PLATFORM_CONFIG="${RUN_ROOT}/config/platform-resolved.yaml"
+export PLATFORM_A_SLAM="${RUN_ROOT}/config/platform-parte-a-slam.yaml"
+export PLATFORM_A_MAPA="${RUN_ROOT}/config/platform-parte-a-mapa.yaml"
+export PLATFORM_B="${RUN_ROOT}/config/platform-parte-b.yaml"
+export PLATFORM_C="${RUN_ROOT}/config/platform-parte-c.yaml"
 
 export ODOM_TOPIC="${ROBOT_NS}/odom"
 export SCAN_TOPIC="${ROBOT_NS}/scan"
@@ -63,25 +67,9 @@ mkdir -p \
   "${RUN_ROOT}/logs"
 ```
 
-Registrar la configuracion resuelta junto con la corrida.
-
-```bash
-[Notebook laboratorio]
-cat > "${PLATFORM_CONFIG}" <<EOF
-run_id: ${RUN_ID}
-robot_name: ${ROBOT_NAME}
-robot_namespace: ${ROBOT_NS}
-tb4_ssh_host: ${TB4_SSH_HOST}
-odom_topic: ${ODOM_TOPIC}
-scan_topic: ${SCAN_TOPIC}
-tf_topic: ${TF_TOPIC}
-tf_static_topic: ${TF_STATIC_TOPIC}
-rgb_topic: ${RGB_TOPIC}
-camera_info_topic: ${CAMERA_INFO_TOPIC}
-cmd_vel_topic: ${CMD_VEL_TOPIC}
-artifact_root: ${RUN_ROOT}
-EOF
-```
+Cada launch escribe atómicamente su configuración resuelta en
+`config/platform-<etapa>.yaml`. Pasar siempre `run_id:="${RUN_ID}"`; no crear
+ni reutilizar manualmente un único `platform-resolved.yaml`.
 
 ## 2. Preparar la notebook y las terminales
 
@@ -93,6 +81,14 @@ drivers del robot desde la notebook.
 cd /ruta/al/checkout/TP-Final-Rob
 source "${HOME}/miniforge3/etc/profile.d/conda.sh"
 conda activate rosenv_mf
+
+# Limpiar sólo productos de los paquetes renombrados, nunca bags ni runs:
+rm -rf \
+  tp_final_ws/build/tp_slam_interfaces \
+  tp_final_ws/build/tp_slam_aruco \
+  tp_final_ws/install/tp_slam_interfaces \
+  tp_final_ws/install/tp_slam_aruco
+
 cd tp_final_ws
 colcon build --packages-select tp_platform tp_interfaces tp_a_slam_aruco \
   tp_b_navigation tp_c_mission turtlebot3_custom_simulation
@@ -189,11 +185,18 @@ frames se construyen concatenando el namespace.
 [Notebook laboratorio]
 ros2 topic echo --once "${SCAN_TOPIC}" sensor_msgs/msg/LaserScan > "${RUN_ROOT}/config/scan-sample.txt"
 ros2 topic echo --once "${RGB_TOPIC}" sensor_msgs/msg/Image > "${RUN_ROOT}/config/rgb-sample.txt"
+SCAN_FRAME="$(sed -n 's/^[[:space:]]*frame_id: //p' "${RUN_ROOT}/config/scan-sample.txt" | head -1)"
+RGB_FRAME="$(sed -n 's/^[[:space:]]*frame_id: //p' "${RUN_ROOT}/config/rgb-sample.txt" | head -1)"
+ros2 run tf2_ros tf2_echo odom "${ROBOT_NAME}/base_link"
+# Si los frames no llevan prefijo, usar exactamente el frame publicado:
 ros2 run tf2_ros tf2_echo odom base_link
+ros2 run tf2_ros tf2_echo "${ROBOT_NAME}/base_link" "${SCAN_FRAME}"
+ros2 run tf2_ros tf2_echo "${ROBOT_NAME}/base_link" "${RGB_FRAME}"
 ```
 
 Si `base_link` no existe para el robot elegido, identificar el frame base real
-desde TF y registrar la excepcion en `${PLATFORM_CONFIG}` antes de continuar.
+desde TF y registrarlo en las notas de la corrida antes de continuar. No
+anteponer el namespace a un frame que el propio mensaje publica sin él.
 
 ```text
 [RViz]
@@ -201,7 +204,9 @@ desde TF y registrar la excepcion en `${PLATFORM_CONFIG}` antes de continuar.
 2. Agregar LaserScan del topico del robot elegido.
 3. Agregar Image del topico RGB elegido.
 4. Agregar TF y confirmar base, LIDAR y camara.
-5. No grabar si scan, imagen o TF aparecen vencidos o incoherentes.
+5. Repetir la comprobación seleccionando `tb4_0` o `tb4_1`, según
+   `ROBOT_NAME`, y verificar que RViz no consume tópicos del otro robot.
+6. No grabar si scan, imagen o TF aparecen vencidos o incoherentes.
 ```
 
 ## 6. Grabar rosbag onboard
@@ -343,6 +348,7 @@ source install/setup.bash
 ros2 launch tp_a_slam_aruco parte_a_slam.launch.py \
   robot_namespace:="${ROBOT_NAME}" \
   artifact_dir:="${RUN_ROOT}" \
+  run_id:="${RUN_ID}" \
   odom_topic:="${ODOM_TOPIC}" \
   bag_tf_topic:="${TF_TOPIC}" \
   bag_tf_static_topic:="${TF_STATIC_TOPIC}" \
@@ -398,6 +404,7 @@ source install/setup.bash
 ros2 launch tp_a_slam_aruco parte_a_mapa.launch.py \
   robot_namespace:="${ROBOT_NAME}" \
   artifact_dir:="${RUN_ROOT}" \
+  run_id:="${RUN_ID}" \
   trajectory_file:="${TRAJECTORY_FILE}" \
   odom_topic:="${ODOM_TOPIC}" \
   scan_topic:="${SCAN_TOPIC}" \
@@ -469,6 +476,8 @@ artefactos mezclados entre corridas.
 
 Parte B real se ejecuta despues de aceptar mapa y landmarks. Antes de lanzar,
 dejar el robot detenido, probar la parada manual y mantener el e-stop accesible.
+El estado de la evidencia local previa está en
+`docs/parte_b/tb4-mcl-obstacle-diagnostic.md`.
 
 Terminal N1, parada disponible antes de cualquier goal:
 
@@ -490,12 +499,21 @@ ros2 launch tp_b_navigation parte_b.launch.py \
   profile:=real_tb4 \
   robot_namespace:="${ROBOT_NAME}" \
   artifact_dir:="${RUN_ROOT}" \
+  run_id:="${RUN_ID}" \
   map_yaml:="${MAP_YAML}" \
   landmark_map_file:="${TRAJECTORY_FILE}" \
+  cmd_vel_topic:=/test/cmd_vel \
   enable_safety_gates:=true
 ```
 
 Checkpoint B1, localizacion sin movimiento autonomo:
+
+**Estado inicial: PENDIENTE EN HARDWARE.** Ejecutar B1 con
+`cmd_vel_topic:=/test/cmd_vel` y confirmar que ningún publisher aparece en
+`${CMD_VEL_TOPIC}` ni el robot se mueve. Volver al tópico real únicamente para
+B2, después de aprobar B1 y repetir la parada segura: detener el launch y
+relanzar el mismo comando reemplazando
+`cmd_vel_topic:=/test/cmd_vel` por `cmd_vel_topic:="${CMD_VEL_TOPIC}"`.
 
 ```text
 [RViz]
@@ -522,6 +540,11 @@ ros2 topic info "${CMD_VEL_TOPIC}" -v
 
 Checkpoint B2, navegacion basica:
 
+**Estado inicial: PENDIENTE EN HARDWARE.** Antes de cada goal: cancelar toda
+misión previa, publicar `Twist` cero, confirmar robot detenido y volver a
+probar el método de parada inmediata. Hacer primero un goal corto y luego
+múltiples goals sólo si el primero es seguro.
+
 ```text
 [Accion fisica]
 1. Mantener persona responsable junto al e-stop.
@@ -544,6 +567,11 @@ de localizacion/TF/scan/monitor.
 ```
 
 Checkpoint B3, obstaculos dinamicos:
+
+**Estado inicial: PENDIENTE EN HARDWARE.** Antes de cada subprueba: cancelar,
+publicar cero y confirmar robot detenido. El orden obligatorio es detección
+detenido, replan sin movimiento y recién después evasión a velocidad reducida
+con recuperación de localización.
 
 ```text
 [Accion fisica]
@@ -575,6 +603,10 @@ Preparar escenario:
 
 Checkpoint C1, percepcion con robot detenido:
 
+**Estado inicial: PENDIENTE EN HARDWARE.** Cancelar, publicar cero, confirmar
+robot detenido y mantener la salida de velocidad física sin publishers durante
+esta verificación de percepción.
+
 ```bash
 [Notebook laboratorio]
 ros2 topic echo --once "${RGB_TOPIC}" sensor_msgs/msg/Image
@@ -588,15 +620,21 @@ Elegir el topico que entregue depth metrico alineado con el RGB y conservarlo:
 [Notebook laboratorio]
 export DEPTH_TOPIC="${ROBOT_NS}/RUTA/DEPTH_ALINEADO"
 ros2 topic echo --once "${DEPTH_TOPIC}" sensor_msgs/msg/Image
+ros2 topic info "${RGB_TOPIC}" -v
+ros2 topic info "${DEPTH_TOPIC}" -v
 ```
 
 ```text
 [RViz]
 1. Confirmar RGB.
 2. Identificar depth metrico alineado con RGB.
-3. Confirmar TF camara -> map.
-4. Ver /red_cone/debug_image, /red_cone/mask y /red_cone_pose.
-5. No iniciar mision completa si depth alineado no esta validado.
+3. Confirmar que RGB y depth tienen las mismas dimensiones y corresponden al
+   mismo campo visual; registrar encoding, ancho, alto y timestamps.
+4. Confirmar TF camara -> map en el timestamp de RGB.
+5. Ver /red_cone/debug_image, /red_cone/mask y /red_cone_pose.
+6. Confirmar `/vision_ready: true`; ante cualquier incumplimiento debe ser
+   `false`.
+7. No iniciar mision completa si depth alineado no esta validado.
 
 APROBAR: cono rojo estable produce pose en map; distractores no rojos no
 producen deteccion; depth, CameraInfo y TF son coherentes.
@@ -620,6 +658,7 @@ ros2 launch tp_c_mission parte_c_real.launch.py \
   profile:=real_tb4 \
   robot_namespace:="${ROBOT_NAME}" \
   artifact_dir:="${RUN_ROOT}" \
+  run_id:="${RUN_ID}" \
   map_yaml:="${MAP_YAML}" \
   landmark_map_file:="${TRAJECTORY_FILE}" \
   depth_topic:="${DEPTH_TOPIC}" \
@@ -627,6 +666,9 @@ ros2 launch tp_c_mission parte_c_real.launch.py \
 ```
 
 Checkpoint C2, aproximacion:
+
+**Estado inicial: PENDIENTE EN HARDWARE.** Cancelar, publicar cero y confirmar
+robot detenido antes de validar la pose; esta prueba no autoriza movimiento.
 
 ```text
 [RViz]
@@ -641,6 +683,10 @@ camara usada como sustituto de la grilla.
 ```
 
 Checkpoint C3, mision completa:
+
+**Estado inicial: PENDIENTE EN HARDWARE.** Sólo habilitarla después de aprobar
+C1 y C2. Antes de cada intento: cancelar, publicar cero, confirmar parada
+manual/e-stop y probar luego cancelación, datos stale y parada de emergencia.
 
 ```bash
 [Notebook laboratorio]
@@ -694,7 +740,7 @@ ros2 topic echo --once "${CMD_VEL_TOPIC}" geometry_msgs/msg/Twist
 | Sintoma | Comprobacion y accion |
 |---|---|
 | No hay discovery | Igualar `ROS_DOMAIN_ID` y `RMW_IMPLEMENTATION`; comprobar red, reiniciar `ros2 daemon`, volver a listar nodos. |
-| Topicos del TB4 incorrecto | Revisar `ROBOT_NAME`, `ROBOT_NS` y `platform-resolved.yaml`; no usar overrides de otro namespace. |
+| Topicos del TB4 incorrecto | Revisar `ROBOT_NAME`, `ROBOT_NS` y el `platform-<etapa>.yaml`; no usar overrides de otro namespace. |
 | Falta TF | Inspeccionar frame de scan/camara y `ros2 run tf2_ros tf2_echo`; no inventar frames con el namespace. |
 | Depth no sirve | Confirmar encoding, escala metrica, alineacion con RGB y timestamps; repetir C1. |
 | MCL no converge | Revisar `/initialpose`, mapa/landmarks del mismo RUN_ID, observaciones ArUco y covarianza. |
@@ -710,7 +756,10 @@ No desactivar safety gates para hacer desaparecer un diagnostico.
 Antes de cerrar la sesion, conservar como minimo:
 
 - `acquisition/laberinto/metadata.yaml` y archivos `.db3`.
-- `config/platform-resolved.yaml`.
+- `config/platform-parte-a-slam.yaml`.
+- `config/platform-parte-a-mapa.yaml`.
+- `config/platform-parte-b.yaml`.
+- `config/platform-parte-c.yaml`.
 - `config/bag-info.txt`.
 - `config/bag-topics.txt`.
 - `parte_a/trajectory.json`.
@@ -721,6 +770,14 @@ Antes de cerrar la sesion, conservar como minimo:
 - capturas o notas de RViz para gates A, B y C.
 - logs de comandos relevantes.
 - resultado aprobado/rechazado de A1-A3, B1-B3 y C1-C3.
+
+Estado de referencia antes del laboratorio:
+
+| Gate | Estado | Evidencia requerida |
+|---|---|---|
+| A1–A3, bag conocido | Verificado localmente con salvedades documentadas | `docs/parte_a/tb4-map-comparison.md` |
+| B1–B3 | Pendiente en hardware | MCL, comandos, planes, obstáculos y parada segura |
+| C1–C3 | Pendiente en hardware | RGB-D alineado, pose de aproximación, misión y fallos seguros |
 
 Crear un resumen textual de la corrida.
 

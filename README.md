@@ -5,6 +5,13 @@ El procedimiento ejecutable para el dia de laboratorio esta en el
 Incluye terminales, seguridad, adquisicion, etapas A/B/C, criterios de
 aceptacion, troubleshooting y artefactos para `tb4_0` y `tb4_1`.
 
+La preparación local y con bags está verificada. Los gates físicos B1–B3 y
+C1–C3 siguen pendientes hasta ejecutarlos sobre un TurtleBot4; el runbook no
+los da por aprobados. La evidencia reproducible disponible se resume en:
+
+- [comparación de mapas y bracketing de Parte A](docs/parte_a/tb4-map-comparison.md);
+- [diagnóstico MCL/obstáculos de Parte B](docs/parte_b/tb4-mcl-obstacle-diagnostic.md).
+
 Implementación ROS 2 del flujo completo del trabajo final:
 
 1. **Parte A — SLAM y mapeo:** procesa un rosbag real del TurtleBot4, estima la trayectoria con Graph SLAM y ArUco, y genera una grilla de ocupación.
@@ -50,6 +57,15 @@ python3 -m pip install "numpy<2" gtsam pyyaml opencv-contrib-python scipy
 Todos los comandos siguientes parten de la raíz del repositorio clonado:
 
 ```bash
+source "${HOME}/miniforge3/etc/profile.d/conda.sh"
+conda activate rosenv_mf
+
+# Sólo después de los renombres históricos, quitar productos obsoletos:
+rm -rf tp_final_ws/build/tp_slam_interfaces \
+  tp_final_ws/build/tp_slam_aruco \
+  tp_final_ws/install/tp_slam_interfaces \
+  tp_final_ws/install/tp_slam_aruco
+
 cd tp_final_ws
 colcon build --packages-select tp_platform tp_interfaces tp_a_slam_aruco \
   tp_b_navigation tp_c_mission turtlebot3_custom_simulation
@@ -78,6 +94,7 @@ Terminal 2:
 source install/setup.bash
 ros2 launch tp_a_slam_aruco parte_a_slam.launch.py \
   robot_namespace:=tb4_0 \
+  run_id:=laberinto-tb4_0 \
   calibration_file:="$(pwd)/src/tp_a_slam_aruco/config/camera_tb4_0.yaml" \
   trajectory_file:=/tmp/trayectoria.json \
   use_bag_tf:=true
@@ -108,6 +125,7 @@ Terminal 2:
 source install/setup.bash
 ros2 launch tp_a_slam_aruco parte_a_mapa.launch.py \
   robot_namespace:=tb4_0 \
+  run_id:=laberinto-tb4_0 \
   trajectory_file:=/tmp/trayectoria.json \
   map_output:=/tmp/mapa
 ```
