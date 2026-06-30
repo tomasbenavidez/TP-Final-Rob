@@ -98,7 +98,7 @@ Desde la raíz del repositorio:
 
 ```bash
 cd tp_final_ws
-colcon build --packages-select tp_interfaces tp_a_slam_aruco \
+colcon build --packages-select tp_platform tp_interfaces tp_a_slam_aruco \
   tp_b_navigation tp_c_mission turtlebot3_custom_simulation
 source install/setup.bash
 ```
@@ -141,7 +141,7 @@ Con ROS 2 disponible, ejecutar además:
 
 ```bash
 cd tp_final_ws
-colcon build --packages-select tp_interfaces tp_a_slam_aruco \
+colcon build --packages-select tp_platform tp_interfaces tp_a_slam_aruco \
   tp_b_navigation tp_c_mission turtlebot3_custom_simulation
 source install/setup.bash
 python3 -m pytest src/tp_a_slam_aruco/test src/tp_b_navigation/test src/tp_c_mission/test -q

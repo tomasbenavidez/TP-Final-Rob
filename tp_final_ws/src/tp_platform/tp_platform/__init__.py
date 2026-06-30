@@ -1,0 +1,1 @@
+"""Contratos compartidos de plataforma."""

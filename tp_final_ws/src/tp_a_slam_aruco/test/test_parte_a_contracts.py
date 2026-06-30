@@ -14,14 +14,14 @@ def test_slam_launch_uses_raw_aruco_detections_for_graph_input():
     assert "'landmarks_topic': '/aruco_detections'" in text
     assert "'optimized_landmarks_topic': '/landmarks'" in text
     assert "'base_debug_topic': '/aruco_base_debug'" in text
-    assert "'geometry_debug_file': '/tmp/aruco_geometry_debug.csv'" in text
+    assert "'geometry_debug_file': geometry_debug_file" in text
     assert "'min_marker_depth': 0.15" in text
     assert "'max_marker_depth': ParameterValue(max_marker_depth, value_type=float)" in text
     assert "'min_marker_area_px': ParameterValue(min_marker_area_px, value_type=float)" in text
     assert "'max_reprojection_error_px': ParameterValue(" in text
-    assert "'diagnostics_file': '/tmp/aruco_detections.csv'" in text
+    assert "'diagnostics_file': diagnostics_file" in text
     assert "'min_landmark_observations': ParameterValue(" in text
-    assert "DeclareLaunchArgument(\n        'max_landmark_position_jump'" in text
+    assert "DeclareLaunchArgument('max_landmark_position_jump'" in text
     assert "'max_landmark_position_jump': ParameterValue(" in text
 
 
@@ -29,15 +29,15 @@ def test_mapping_launch_exposes_scan_tf_and_fallback_controls():
     launch_path = Path(__file__).resolve().parents[1] / 'launch' / 'parte_a_mapa.launch.py'
     text = launch_path.read_text()
 
-    assert "DeclareLaunchArgument(\n        'scan_topic'" in text
-    assert "DeclareLaunchArgument(\n        'base_frame'" in text
-    assert "DeclareLaunchArgument(\n        'lidar_fallback_enabled'" in text
-    assert "DeclareLaunchArgument(\n        'use_bag_tf'" in text
-    assert "DeclareLaunchArgument(\n        'bag_tf_topic'" in text
-    assert "DeclareLaunchArgument(\n        'bag_tf_static_topic'" in text
+    assert "'scan_topic'," in text
+    assert "DeclareLaunchArgument('base_frame'" in text
+    assert "DeclareLaunchArgument('lidar_fallback_enabled'" in text
+    assert "DeclareLaunchArgument('use_bag_tf'" in text
+    assert "'bag_tf_topic'," in text
+    assert "'bag_tf_static_topic'," in text
     assert "executable='tf_bridge'" in text
-    assert "'scan_topic':      scan_topic" in text
-    assert "'base_frame':      base_frame" in text
+    assert "'scan_topic': scan_topic" in text
+    assert "'base_frame': LaunchConfiguration('base_frame')" in text
 
 
 def test_occupancy_grid_reports_lidar_tf_and_fallback_sources():
@@ -95,3 +95,15 @@ def test_geometry_debug_writer_creates_parent_directory(tmp_path):
     node._flush_geometry_debug()
 
     assert debug_path.exists()
+
+
+def test_part_a_nodes_handle_ros_launch_external_shutdown():
+    package = Path(__file__).resolve().parents[1] / 'tp_a_slam_aruco'
+    for filename in (
+        'tf_bridge_node.py',
+        'aruco_detector_node.py',
+        'graph_slam_node.py',
+    ):
+        text = (package / filename).read_text()
+        assert 'ExternalShutdownException' in text, filename
+        assert 'except (KeyboardInterrupt, ExternalShutdownException):' in text, filename

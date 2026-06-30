@@ -80,7 +80,7 @@ When ROS 2 is available, run:
 
 ```bash
 cd tp_final_ws
-colcon build --packages-select tp_interfaces tp_a_slam_aruco \
+colcon build --packages-select tp_platform tp_interfaces tp_a_slam_aruco \
   tp_b_navigation tp_c_mission turtlebot3_custom_simulation
 source install/setup.bash
 python3 -m pytest src/tp_a_slam_aruco/test src/tp_b_navigation/test src/tp_c_mission/test -q
@@ -185,7 +185,7 @@ With ROS 2:
 
 ```bash
 cd tp_final_ws
-colcon build --packages-select tp_interfaces tp_a_slam_aruco tp_b_navigation tp_c_mission
+colcon build --packages-select tp_platform tp_interfaces tp_a_slam_aruco tp_b_navigation tp_c_mission
 source install/setup.bash
 python3 -m pytest src/tp_a_slam_aruco/test src/tp_b_navigation/test src/tp_c_mission/test -q
 ```
@@ -240,7 +240,7 @@ With ROS 2:
 
 ```bash
 cd tp_final_ws
-colcon build --packages-select tp_interfaces tp_a_slam_aruco tp_b_navigation tp_c_mission
+colcon build --packages-select tp_platform tp_interfaces tp_a_slam_aruco tp_b_navigation tp_c_mission
 source install/setup.bash
 python3 -m pytest src/tp_a_slam_aruco/test src/tp_b_navigation/test src/tp_c_mission/test -q
 ```
@@ -297,7 +297,7 @@ With ROS 2:
 
 ```bash
 cd tp_final_ws
-colcon build --packages-select tp_interfaces tp_a_slam_aruco tp_b_navigation tp_c_mission
+colcon build --packages-select tp_platform tp_interfaces tp_a_slam_aruco tp_b_navigation tp_c_mission
 source install/setup.bash
 ros2 launch tp_b_navigation parte_b.launch.py profile:=simulation_tb3 --show-args
 ros2 launch tp_c_mission parte_c_real.launch.py profile:=real_tb4 --show-args
@@ -359,7 +359,7 @@ With ROS 2 and a known bag:
 
 ```bash
 cd tp_final_ws
-colcon build --packages-select tp_interfaces tp_a_slam_aruco tp_b_navigation
+colcon build --packages-select tp_platform tp_interfaces tp_a_slam_aruco tp_b_navigation
 source install/setup.bash
 python3 -m pytest src/tp_a_slam_aruco/test src/tp_b_navigation/test -q
 ros2 launch tp_a_slam_aruco parte_a_mapa.launch.py \
@@ -421,7 +421,7 @@ With ROS 2:
 
 ```bash
 cd tp_final_ws
-colcon build --packages-select tp_interfaces tp_a_slam_aruco tp_b_navigation tp_c_mission
+colcon build --packages-select tp_platform tp_interfaces tp_a_slam_aruco tp_b_navigation tp_c_mission
 source install/setup.bash
 ros2 launch tp_a_slam_aruco parte_a_slam.launch.py robot_namespace:=tb4_0 --show-args
 ros2 launch tp_a_slam_aruco parte_a_slam.launch.py robot_namespace:=tb4_1 --show-args
@@ -481,7 +481,7 @@ With ROS 2:
 
 ```bash
 cd tp_final_ws
-colcon build --packages-select tp_interfaces tp_a_slam_aruco tp_b_navigation tp_c_mission
+colcon build --packages-select tp_platform tp_interfaces tp_a_slam_aruco tp_b_navigation tp_c_mission
 source install/setup.bash
 python3 -m pytest src/tp_b_navigation/test src/tp_c_mission/test -q
 ros2 launch tp_b_navigation parte_b.launch.py profile:=real_tb4 --show-args
@@ -545,7 +545,7 @@ With ROS 2:
 
 ```bash
 cd tp_final_ws
-colcon build --packages-select tp_interfaces tp_a_slam_aruco tp_b_navigation tp_c_mission
+colcon build --packages-select tp_platform tp_interfaces tp_a_slam_aruco tp_b_navigation tp_c_mission
 source install/setup.bash
 python3 -m pytest src/tp_c_mission/test src/tp_b_navigation/test -q
 ros2 launch tp_c_mission parte_c_real.launch.py profile:=real_tb4 --show-args

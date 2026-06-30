@@ -6,6 +6,7 @@ from dataclasses import replace
 import numpy as np
 
 import rclpy # type: ignore
+from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
 from geometry_msgs.msg import PoseArray, PoseStamped
 from nav_msgs.msg import Odometry, Path
@@ -750,7 +751,7 @@ def main(args=None):
     node = GraphSlamNode()
     try:
         rclpy.spin(node)
-    except KeyboardInterrupt:
+    except (KeyboardInterrupt, ExternalShutdownException):
         pass
     finally:
         node.save_trajectory()

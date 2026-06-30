@@ -7,167 +7,59 @@ Lanza el pipeline de SLAM de la Parte A (Opción 3):
   - aruco_detector_node : detecta los landmarks ArUco
   - graph_slam_node     : construye y optimiza el grafo
   - rviz2               : vista en tiempo simulado con trayectoria, TF e imagen
-
-USO:
-  # Terminal 1: reproducir el bag del laberinto
-  ros2 bag play <carpeta_del_bag> --clock
-  # Terminal 2: lanzar el pipeline
-  ros2 launch tp_a_slam_aruco parte_a_slam.launch.py \\
-      calibration_file:=<ruta_al_yaml_de_calibracion> \\
-      trajectory_file:=/tmp/trayectoria.json
-
-Parar con Ctrl+C guarda automáticamente la trayectoria optimizada
-(si trajectory_file está configurado), lista para la segunda pasada
-de mapeo LIDAR (Fase 5).
 """
 
 import os
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument
+from launch.actions import DeclareLaunchArgument, OpaqueFunction
 from launch.conditions import IfCondition
 from launch.substitutions import LaunchConfiguration
-from launch_ros.actions import Node
-from launch_ros.actions import SetParameter
+from launch_ros.actions import Node, SetParameter
 from launch_ros.parameter_descriptions import ParameterValue
+from tp_platform.platform_profiles import (
+    BAG_TB4,
+    resolve_profile,
+    validate_tb4_topics,
+    write_resolved_platform,
+)
 
 
-def generate_launch_description():
-    rviz_default_config = os.path.join(
-        get_package_share_directory('tp_a_slam_aruco'),
-        'config',
-        'rviz_config.rviz',
-    )
+_UNSET = ''
 
-    calib_arg = DeclareLaunchArgument(
-        'calibration_file',
-        default_value='',
-        description='Ruta al YAML con K y coeficientes de distorsión (TB4 #0)',
-    )
-    odom_topic_arg = DeclareLaunchArgument(
-        'odom_topic',
-        default_value='/tb4_0/odom',
-        description='Odometría física del TurtleBot4 o del rosbag.',
-    )
-    kf_dist_arg = DeclareLaunchArgument(
-        'kf_dist',
-        default_value='0.15',
-        description='Distancia mínima para crear un keyframe nuevo (metros)',
-    )
-    kf_angle_max_arg = DeclareLaunchArgument(
-        'kf_angle_max',
-        default_value='0.60',
-        description='Giro mínimo para crear un keyframe por rotación (rad)',
-    )
-    reobs_min_parallax_arg = DeclareLaunchArgument(
-        'reobs_min_parallax',
-        default_value='0.20',
-        description='Parallax mínima para aceptar una reobservación (metros)',
-    )
-    optimize_every_arg = DeclareLaunchArgument(
-        'optimize_every',
-        default_value='1',
-        description='Cada cuántos keyframes optimizar el grafo',
-    )
-    camera_tx_arg = DeclareLaunchArgument(
-        'camera_tx',
-        default_value='-0.0596',
-        description='Traslación x de cámara respecto de base_link (metros)',
-    )
-    camera_ty_arg = DeclareLaunchArgument(
-        'camera_ty',
-        default_value='0.0',
-        description='Traslación y de cámara respecto de base_link (metros)',
-    )
-    camera_yaw_arg = DeclareLaunchArgument(
-        'camera_yaw',
-        default_value='0.0',
-        description='Yaw de cámara respecto de base_link (rad)',
-    )
-    use_bag_tf_arg = DeclareLaunchArgument(
-        'use_bag_tf',
-        default_value='true',
-        description='Repubicar el TF del bag a /tf y /tf_static para tf2/RViz.',
-    )
-    bag_tf_topic_arg = DeclareLaunchArgument(
-        'bag_tf_topic',
-        default_value='/tb4_0/tf',
-        description='Topico TF dinamico grabado en el rosbag.',
-    )
-    bag_tf_static_topic_arg = DeclareLaunchArgument(
-        'bag_tf_static_topic',
-        default_value='/tb4_0/tf_static',
-        description='Topico TF estatico grabado en el rosbag.',
-    )
-    trajectory_file_arg = DeclareLaunchArgument(
-        'trajectory_file',
-        default_value=os.path.join(
-            get_package_share_directory('tp_a_slam_aruco'), 'runs', 'trayectoria.json'),
-        description='Ruta JSON donde guardar la trayectoria optimizada al finalizar (para Fase 5)',
-    )
-    camera_frame_arg = DeclareLaunchArgument(
-        'camera_frame',
-        default_value='oakd_rgb_camera_optical_frame',
-        description='frame_id de la cámara. graph_slam_node usará el TF '
-                    'de este frame a base_link para transformar observaciones.',
-    )
-    use_sim_time_arg = DeclareLaunchArgument(
-        'use_sim_time',
-        default_value='true',
-        description='Usar reloj de simulación (necesario al reproducir un bag con --clock)',
-    )
-    launch_rviz_arg = DeclareLaunchArgument(
-        'launch_rviz',
-        default_value='true',
-        description='Lanzar RViz sincronizado con /clock como parte del pipeline.',
-    )
-    rviz_config_arg = DeclareLaunchArgument(
-        'rviz_config',
-        default_value=rviz_default_config,
-        description='Ruta al archivo .rviz para la visualizacion de Parte A.',
-    )
-    min_marker_area_px_arg = DeclareLaunchArgument(
-        'min_marker_area_px',
-        default_value='250.0',
-        description='Area minima del marcador detectado en pixeles.',
-    )
-    max_marker_depth_arg = DeclareLaunchArgument(
-        'max_marker_depth',
-        default_value='3.0',
-        description='Profundidad maxima aceptada para ArUco en metros.',
-    )
-    max_reprojection_error_px_arg = DeclareLaunchArgument(
-        'max_reprojection_error_px',
-        default_value='4.0',
-        description='Error maximo de reproyeccion para aceptar una pose ArUco.',
-    )
-    allowed_marker_ids_arg = DeclareLaunchArgument(
-        'allowed_marker_ids',
-        default_value='',
-        description='Whitelist opcional de IDs ArUco, separados por coma.',
-    )
-    min_landmark_observations_arg = DeclareLaunchArgument(
-        'min_landmark_observations',
-        default_value='3',
-        description='Cantidad de keyframes donde debe aparecer un ID nuevo.',
-    )
-    max_landmark_position_jump_arg = DeclareLaunchArgument(
-        'max_landmark_position_jump',
-        default_value='0.75',
-        description='Salto maximo en metros para aceptar una reobservacion ArUco.',
+
+def _arg(context, name):
+    return LaunchConfiguration(name).perform(context)
+
+
+def _override(context, name, default):
+    value = _arg(context, name)
+    return default if value == _UNSET else value
+
+
+def _launch_nodes(context, pkg):
+    profile = resolve_profile(BAG_TB4, robot_namespace=_arg(context, 'robot_namespace'))
+    odom_topic = _override(context, 'odom_topic', profile.odom_topic)
+    image_topic = _override(context, 'image_topic', profile.rgb_topic)
+    bag_tf_topic = _override(context, 'bag_tf_topic', profile.tf_topic)
+    bag_tf_static_topic = _override(
+        context, 'bag_tf_static_topic', profile.tf_static_topic)
+    validate_tb4_topics(
+        profile.robot_namespace,
+        odom_topic=odom_topic,
+        image_topic=image_topic,
+        bag_tf_topic=bag_tf_topic,
+        bag_tf_static_topic=bag_tf_static_topic,
     )
 
     calibration_file = LaunchConfiguration('calibration_file')
-    odom_topic = LaunchConfiguration('odom_topic')
     camera_frame = LaunchConfiguration('camera_frame')
     kf_dist = LaunchConfiguration('kf_dist')
     kf_angle_max = LaunchConfiguration('kf_angle_max')
     reobs_min_parallax = LaunchConfiguration('reobs_min_parallax')
     optimize_every = LaunchConfiguration('optimize_every')
     use_bag_tf = LaunchConfiguration('use_bag_tf')
-    bag_tf_topic = LaunchConfiguration('bag_tf_topic')
-    bag_tf_static_topic = LaunchConfiguration('bag_tf_static_topic')
     camera_tx = LaunchConfiguration('camera_tx')
     camera_ty = LaunchConfiguration('camera_ty')
     camera_yaw = LaunchConfiguration('camera_yaw')
@@ -181,6 +73,27 @@ def generate_launch_description():
     allowed_marker_ids = LaunchConfiguration('allowed_marker_ids')
     min_landmark_observations = LaunchConfiguration('min_landmark_observations')
     max_landmark_position_jump = LaunchConfiguration('max_landmark_position_jump')
+    diagnostics_file = _override(
+        context, 'diagnostics_file', '/tmp/aruco_detections.csv')
+    geometry_debug_file = _override(
+        context, 'geometry_debug_file', '/tmp/aruco_geometry_debug.csv')
+
+    write_resolved_platform(
+        _arg(context, 'artifact_dir') or '/tmp/tp_final_rob',
+        profile,
+        topics={
+            'odom_topic': odom_topic,
+            'image_topic': image_topic,
+            'bag_tf_topic': bag_tf_topic,
+            'bag_tf_static_topic': bag_tf_static_topic,
+        },
+        frames={'camera_frame': _arg(context, 'camera_frame')},
+        artifacts={
+            'trajectory_file': _arg(context, 'trajectory_file'),
+            'diagnostics_file': diagnostics_file,
+            'geometry_debug_file': geometry_debug_file,
+        },
+    )
 
     tf_bridge_node = Node(
         package='tp_a_slam_aruco',
@@ -203,7 +116,7 @@ def generate_launch_description():
         output='screen',
         parameters=[{
             'calibration_file': calibration_file,
-            'image_topic': 'tb4_0/oakd/rgb/preview/image_raw',
+            'image_topic': image_topic,
             'marker_length': 0.0889,
             'aruco_dict': 'DICT_4X4_50',
             'camera_frame': camera_frame,
@@ -217,7 +130,7 @@ def generate_launch_description():
                 max_reprojection_error_px, value_type=float
             ),
             'allowed_marker_ids': allowed_marker_ids,
-            'diagnostics_file': '/tmp/aruco_detections.csv',
+            'diagnostics_file': diagnostics_file,
         }],
     )
 
@@ -248,7 +161,7 @@ def generate_launch_description():
             'camera_ty': camera_ty,
             'camera_yaw': camera_yaw,
             'trajectory_file': trajectory_file,
-            'geometry_debug_file': '/tmp/aruco_geometry_debug.csv',
+            'geometry_debug_file': geometry_debug_file,
         }],
     )
 
@@ -262,33 +175,77 @@ def generate_launch_description():
         parameters=[{'use_sim_time': use_sim_time}],
     )
 
+    return [tf_bridge_node, aruco_node, graph_slam_node, rviz_node]
+
+
+def generate_launch_description():
+    pkg = get_package_share_directory('tp_a_slam_aruco')
+    rviz_default_config = os.path.join(pkg, 'config', 'rviz_config.rviz')
+
     return LaunchDescription([
-        calib_arg,
-        odom_topic_arg,
-        camera_frame_arg,
-        kf_dist_arg,
-        kf_angle_max_arg,
-        reobs_min_parallax_arg,
-        optimize_every_arg,
-        use_bag_tf_arg,
-        bag_tf_topic_arg,
-        bag_tf_static_topic_arg,
-        camera_tx_arg,
-        camera_ty_arg,
-        camera_yaw_arg,
-        trajectory_file_arg,
-        use_sim_time_arg,
-        launch_rviz_arg,
-        rviz_config_arg,
-        min_marker_area_px_arg,
-        max_marker_depth_arg,
-        max_reprojection_error_px_arg,
-        allowed_marker_ids_arg,
-        min_landmark_observations_arg,
-        max_landmark_position_jump_arg,
-        SetParameter(name='use_sim_time', value=use_sim_time),
-        tf_bridge_node,
-        aruco_node,
-        graph_slam_node,
-        rviz_node,
+        DeclareLaunchArgument(
+            'robot_namespace',
+            default_value='tb4_0',
+            description='Namespace del TurtleBot4: tb4_0 o tb4_1.',
+        ),
+        DeclareLaunchArgument(
+            'artifact_dir',
+            default_value='/tmp/tp_final_rob',
+            description='Directorio de artefactos donde registrar platform-resolved.yaml.',
+        ),
+        DeclareLaunchArgument(
+            'calibration_file',
+            default_value='',
+            description='Ruta al YAML con K y coeficientes de distorsión.',
+        ),
+        DeclareLaunchArgument(
+            'odom_topic',
+            default_value=_UNSET,
+            description='Override de odometría; default: <robot_namespace>/odom.',
+        ),
+        DeclareLaunchArgument(
+            'image_topic',
+            default_value=_UNSET,
+            description='Override de RGB; default: <robot_namespace>/oakd/rgb/preview/image_raw.',
+        ),
+        DeclareLaunchArgument('kf_dist', default_value='0.15'),
+        DeclareLaunchArgument('kf_angle_max', default_value='0.60'),
+        DeclareLaunchArgument('reobs_min_parallax', default_value='0.20'),
+        DeclareLaunchArgument('optimize_every', default_value='1'),
+        DeclareLaunchArgument('camera_tx', default_value='-0.0596'),
+        DeclareLaunchArgument('camera_ty', default_value='0.0'),
+        DeclareLaunchArgument('camera_yaw', default_value='0.0'),
+        DeclareLaunchArgument('use_bag_tf', default_value='true'),
+        DeclareLaunchArgument(
+            'bag_tf_topic',
+            default_value=_UNSET,
+            description='Override de TF dinámico; default: <robot_namespace>/tf.',
+        ),
+        DeclareLaunchArgument(
+            'bag_tf_static_topic',
+            default_value=_UNSET,
+            description='Override de TF estático; default: <robot_namespace>/tf_static.',
+        ),
+        DeclareLaunchArgument(
+            'trajectory_file',
+            default_value=os.path.join(pkg, 'runs', 'trayectoria.json'),
+        ),
+        DeclareLaunchArgument(
+            'camera_frame',
+            default_value='oakd_rgb_camera_optical_frame',
+            description='frame_id de cámara usado para transformar observaciones.',
+        ),
+        DeclareLaunchArgument('use_sim_time', default_value='true'),
+        DeclareLaunchArgument('launch_rviz', default_value='true'),
+        DeclareLaunchArgument('rviz_config', default_value=rviz_default_config),
+        DeclareLaunchArgument('min_marker_area_px', default_value='250.0'),
+        DeclareLaunchArgument('max_marker_depth', default_value='3.0'),
+        DeclareLaunchArgument('max_reprojection_error_px', default_value='4.0'),
+        DeclareLaunchArgument('allowed_marker_ids', default_value=''),
+        DeclareLaunchArgument('min_landmark_observations', default_value='3'),
+        DeclareLaunchArgument('max_landmark_position_jump', default_value='0.75'),
+        DeclareLaunchArgument('diagnostics_file', default_value=_UNSET),
+        DeclareLaunchArgument('geometry_debug_file', default_value=_UNSET),
+        SetParameter(name='use_sim_time', value=LaunchConfiguration('use_sim_time')),
+        OpaqueFunction(function=_launch_nodes, args=[pkg]),
     ])

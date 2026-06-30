@@ -48,6 +48,17 @@ class PlatformProfilesTest(unittest.TestCase):
         self.assertEqual(profile.landmark_source, 'aruco')
         self.assertFalse(profile.launch_virtual_landmarks)
 
+    def test_bag_tb4_can_resolve_tb4_1_topics(self):
+        from tp_b_navigation.platform_profiles import resolve_profile
+
+        profile = resolve_profile('bag_tb4', robot_namespace='tb4_1')
+
+        self.assertEqual(profile.robot_namespace, '/tb4_1')
+        self.assertEqual(profile.odom_topic, '/tb4_1/odom')
+        self.assertEqual(profile.scan_topic, '/tb4_1/scan')
+        self.assertEqual(profile.tf_topic, '/tb4_1/tf')
+        self.assertEqual(profile.tf_static_topic, '/tb4_1/tf_static')
+
     def test_real_tb4_uses_wall_clock_and_real_robot_topics_without_virtual_landmarks(self):
         from tp_b_navigation.platform_profiles import resolve_profile
 
@@ -62,6 +73,16 @@ class PlatformProfilesTest(unittest.TestCase):
         self.assertFalse(profile.use_sim_time)
         self.assertEqual(profile.landmark_source, 'aruco')
         self.assertFalse(profile.launch_virtual_landmarks)
+
+    def test_real_tb4_can_resolve_tb4_1_topics(self):
+        from tp_b_navigation.platform_profiles import resolve_profile
+
+        profile = resolve_profile('real_tb4', robot_namespace='/tb4_1')
+
+        self.assertEqual(profile.robot_namespace, '/tb4_1')
+        self.assertEqual(profile.odom_topic, '/tb4_1/odom')
+        self.assertEqual(profile.cmd_vel_topic, '/tb4_1/cmd_vel')
+        self.assertFalse(profile.use_sim_time)
 
     def test_unknown_profile_lists_supported_profiles(self):
         from tp_b_navigation.platform_profiles import resolve_profile
