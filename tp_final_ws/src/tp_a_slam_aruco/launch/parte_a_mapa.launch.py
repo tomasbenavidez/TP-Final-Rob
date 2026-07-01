@@ -161,7 +161,7 @@ def generate_launch_description():
             default_value='/tmp/tp_final_rob/mapa',
         ),
         DeclareLaunchArgument('resolution', default_value='0.05'),
-        DeclareLaunchArgument('max_angular_velocity', default_value='0.0'),
+        DeclareLaunchArgument('max_angular_velocity', default_value='0.6'),
         DeclareLaunchArgument('max_odom_buffer_samples', default_value='4000'),
         DeclareLaunchArgument('max_pending_scans', default_value='500'),
         DeclareLaunchArgument('max_scan_wait_seconds', default_value='1.0'),

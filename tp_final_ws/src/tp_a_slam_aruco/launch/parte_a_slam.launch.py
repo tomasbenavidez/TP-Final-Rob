@@ -56,6 +56,7 @@ def _launch_nodes(context, pkg):
     )
 
     calibration_file = LaunchConfiguration('calibration_file')
+    prefer_camera_info = LaunchConfiguration('prefer_camera_info')
     camera_frame = LaunchConfiguration('camera_frame')
     kf_dist = LaunchConfiguration('kf_dist')
     kf_angle_max = LaunchConfiguration('kf_angle_max')
@@ -69,12 +70,20 @@ def _launch_nodes(context, pkg):
     use_sim_time = LaunchConfiguration('use_sim_time')
     launch_rviz = LaunchConfiguration('launch_rviz')
     rviz_config = LaunchConfiguration('rviz_config')
+    rviz_log_level = LaunchConfiguration('rviz_log_level')
     min_marker_area_px = LaunchConfiguration('min_marker_area_px')
+    min_marker_depth = LaunchConfiguration('min_marker_depth')
     max_marker_depth = LaunchConfiguration('max_marker_depth')
     max_reprojection_error_px = LaunchConfiguration('max_reprojection_error_px')
     allowed_marker_ids = LaunchConfiguration('allowed_marker_ids')
     min_landmark_observations = LaunchConfiguration('min_landmark_observations')
     max_landmark_position_jump = LaunchConfiguration('max_landmark_position_jump')
+    detection_keyframe_tolerance = LaunchConfiguration('detection_keyframe_tolerance')
+    max_pending_detections = LaunchConfiguration('max_pending_detections')
+    max_detection_wait_seconds = LaunchConfiguration('max_detection_wait_seconds')
+    max_odom_buffer_samples = LaunchConfiguration('max_odom_buffer_samples')
+    maha_threshold = LaunchConfiguration('maha_threshold')
+    cauchy_k = LaunchConfiguration('cauchy_k')
     diagnostics_file = _override(
         context, 'diagnostics_file', '/tmp/aruco_detections.csv')
     geometry_debug_file = _override(
@@ -121,6 +130,7 @@ def _launch_nodes(context, pkg):
         output='screen',
         parameters=[{
             'calibration_file': calibration_file,
+            'prefer_camera_info': ParameterValue(prefer_camera_info, value_type=bool),
             'image_topic': image_topic,
             'marker_length': 0.0889,
             'aruco_dict': 'DICT_4X4_50',
@@ -129,7 +139,7 @@ def _launch_nodes(context, pkg):
             'debug_image_topic': '/aruco/debug_image',
             'publish_debug_image': True,
             'min_marker_area_px': ParameterValue(min_marker_area_px, value_type=float),
-            'min_marker_depth': 0.15,
+            'min_marker_depth': ParameterValue(min_marker_depth, value_type=float),
             'max_marker_depth': ParameterValue(max_marker_depth, value_type=float),
             'max_reprojection_error_px': ParameterValue(
                 max_reprojection_error_px, value_type=float
@@ -154,7 +164,7 @@ def _launch_nodes(context, pkg):
             'optimized_landmarks_topic': '/landmarks',
             'legacy_landmarks_topic': '/landmarks_opt',
             'base_debug_topic': '/aruco_base_debug',
-            'min_marker_depth': 0.15,
+            'min_marker_depth': ParameterValue(min_marker_depth, value_type=float),
             'max_marker_depth': ParameterValue(max_marker_depth, value_type=float),
             'min_landmark_observations': ParameterValue(
                 min_landmark_observations, value_type=int
@@ -162,6 +172,20 @@ def _launch_nodes(context, pkg):
             'max_landmark_position_jump': ParameterValue(
                 max_landmark_position_jump, value_type=float
             ),
+            'detection_keyframe_tolerance': ParameterValue(
+                detection_keyframe_tolerance, value_type=float
+            ),
+            'max_pending_detections': ParameterValue(
+                max_pending_detections, value_type=int
+            ),
+            'max_detection_wait_seconds': ParameterValue(
+                max_detection_wait_seconds, value_type=float
+            ),
+            'max_odom_buffer_samples': ParameterValue(
+                max_odom_buffer_samples, value_type=int
+            ),
+            'maha_threshold': ParameterValue(maha_threshold, value_type=float),
+            'cauchy_k': ParameterValue(cauchy_k, value_type=float),
             'camera_tx': camera_tx,
             'camera_ty': camera_ty,
             'camera_yaw': camera_yaw,
@@ -176,7 +200,10 @@ def _launch_nodes(context, pkg):
         name='rviz2',
         output='screen',
         condition=IfCondition(launch_rviz),
-        arguments=['-d', rviz_config],
+        arguments=[
+            '-d', rviz_config,
+            '--ros-args', '--log-level', rviz_log_level,
+        ],
         parameters=[{'use_sim_time': use_sim_time}],
         remappings=[
             ('/scan', scan_topic),
@@ -192,6 +219,7 @@ def _launch_nodes(context, pkg):
 def generate_launch_description():
     pkg = get_package_share_directory('tp_a_slam_aruco')
     rviz_default_config = os.path.join(pkg, 'config', 'rviz_config.rviz')
+    calibration_default = os.path.join(pkg, 'config', 'camera_tb4_0.yaml')
 
     return LaunchDescription([
         DeclareLaunchArgument(
@@ -207,9 +235,10 @@ def generate_launch_description():
         DeclareLaunchArgument('run_id', default_value='manual'),
         DeclareLaunchArgument(
             'calibration_file',
-            default_value='',
+            default_value=calibration_default,
             description='Ruta al YAML con K y coeficientes de distorsión.',
         ),
+        DeclareLaunchArgument('prefer_camera_info', default_value='false'),
         DeclareLaunchArgument(
             'odom_topic',
             default_value=_UNSET,
@@ -255,12 +284,20 @@ def generate_launch_description():
         DeclareLaunchArgument('use_sim_time', default_value='true'),
         DeclareLaunchArgument('launch_rviz', default_value='true'),
         DeclareLaunchArgument('rviz_config', default_value=rviz_default_config),
+        DeclareLaunchArgument('rviz_log_level', default_value='warn'),
         DeclareLaunchArgument('min_marker_area_px', default_value='250.0'),
+        DeclareLaunchArgument('min_marker_depth', default_value='0.05'),
         DeclareLaunchArgument('max_marker_depth', default_value='3.0'),
         DeclareLaunchArgument('max_reprojection_error_px', default_value='4.0'),
         DeclareLaunchArgument('allowed_marker_ids', default_value=''),
         DeclareLaunchArgument('min_landmark_observations', default_value='3'),
         DeclareLaunchArgument('max_landmark_position_jump', default_value='0.75'),
+        DeclareLaunchArgument('detection_keyframe_tolerance', default_value='0.10'),
+        DeclareLaunchArgument('max_pending_detections', default_value='500'),
+        DeclareLaunchArgument('max_detection_wait_seconds', default_value='1.0'),
+        DeclareLaunchArgument('max_odom_buffer_samples', default_value='4000'),
+        DeclareLaunchArgument('maha_threshold', default_value='5.99'),
+        DeclareLaunchArgument('cauchy_k', default_value='1.0'),
         DeclareLaunchArgument('diagnostics_file', default_value=_UNSET),
         DeclareLaunchArgument('geometry_debug_file', default_value=_UNSET),
         SetParameter(name='use_sim_time', value=LaunchConfiguration('use_sim_time')),
