@@ -99,6 +99,14 @@ def _launch_nodes(context):
             'log_odds_max': LaunchConfiguration('log_odds_max'),
             'occupied_thresh': LaunchConfiguration('occupied_thresh'),
             'free_thresh': LaunchConfiguration('free_thresh'),
+            'max_obstacle_range': LaunchConfiguration('max_obstacle_range'),
+            'max_raytrace_range': LaunchConfiguration('max_raytrace_range'),
+            'publish_debug_overlays': ParameterValue(
+                LaunchConfiguration('publish_debug_overlays'), value_type=bool),
+            'debug_scan_publish_every': LaunchConfiguration('debug_scan_publish_every'),
+            'debug_scan_topic': LaunchConfiguration('debug_scan_topic'),
+            'debug_trajectory_topic': LaunchConfiguration('debug_trajectory_topic'),
+            'debug_landmarks_topic': LaunchConfiguration('debug_landmarks_topic'),
         }],
     )
 
@@ -177,5 +185,21 @@ def generate_launch_description():
         DeclareLaunchArgument('log_odds_max', default_value='5.0'),
         DeclareLaunchArgument('occupied_thresh', default_value='0.60'),
         DeclareLaunchArgument('free_thresh', default_value='0.40'),
+        DeclareLaunchArgument('max_obstacle_range', default_value='2.0'),
+        DeclareLaunchArgument('max_raytrace_range', default_value='2.5'),
+        DeclareLaunchArgument('publish_debug_overlays', default_value='true'),
+        DeclareLaunchArgument('debug_scan_publish_every', default_value='10'),
+        DeclareLaunchArgument(
+            'debug_scan_topic',
+            default_value='/mapping_debug/projected_scan',
+        ),
+        DeclareLaunchArgument(
+            'debug_trajectory_topic',
+            default_value='/mapping_debug/trajectory',
+        ),
+        DeclareLaunchArgument(
+            'debug_landmarks_topic',
+            default_value='/mapping_debug/landmarks',
+        ),
         OpaqueFunction(function=_launch_nodes),
     ])

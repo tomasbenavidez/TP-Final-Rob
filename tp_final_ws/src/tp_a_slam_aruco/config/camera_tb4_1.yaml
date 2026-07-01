@@ -1,0 +1,21 @@
+# Calibracion de catedra camara OAK-D RGB preview - TurtleBot4 #1
+# Usar con prefer_camera_info:=false cuando se quiera fijar esta calibracion
+# y evitar que el camera_info del bag la sobrescriba.
+# Orden de distorsion rational_polynomial: k1, k2, p1, p2, k3, k4, k5, k6.
+
+camera_matrix:
+  - [201.37, 0.0,     123.78]
+  - [0.0,     357.31, 131.25]
+  - [0.0,     0.0,       1.0]
+
+dist_coeffs:
+  - 7.823812007904053
+  - -116.5168228149414
+  - 0.0008780899806879461
+  - 0.000634733063634485
+  - 378.764404296875
+  - 7.6177897453308105
+  - -114.77053833007812
+  - 373.6795654296875
+
+marker_size_m: 0.0889

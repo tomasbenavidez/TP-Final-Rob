@@ -6,6 +6,7 @@ import pytest
 from tp_a_slam_aruco.scan_projection import (
     fallback_sensor_pose_in_map,
     iter_valid_scan_points,
+    iter_mapping_scan_points,
     sensor_pose_in_map,
 )
 
@@ -46,6 +47,29 @@ def test_iter_valid_scan_points_accepts_last_declared_angle():
     assert len(points) == len(expected)
     for point, expected_point in zip(points, expected):
         assert point == pytest.approx(expected_point)
+
+
+def test_iter_mapping_scan_points_limits_obstacles_and_raytracing_separately():
+    scan = make_scan(
+        angle_max=math.pi / 4.0,
+        ranges=[1.0, 2.3],
+    )
+
+    points = list(iter_mapping_scan_points(
+        scan,
+        max_obstacle_range=2.0,
+        max_raytrace_range=2.5,
+    ))
+
+    assert len(points) == 2
+    assert points[0] == pytest.approx((1.0, 0.0, 0.0, 1.0, True))
+    assert points[1] == pytest.approx((
+        2.3 / math.sqrt(2.0),
+        2.3 / math.sqrt(2.0),
+        math.pi / 4.0,
+        2.3,
+        False,
+    ))
 
 
 def test_sensor_pose_in_map_composes_base_pose_and_tf_extrinsics():

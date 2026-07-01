@@ -23,8 +23,8 @@ def test_slam_launch_uses_raw_aruco_detections_for_graph_input():
     assert "'min_marker_area_px': ParameterValue(min_marker_area_px, value_type=float)" in text
     assert "'max_reprojection_error_px': ParameterValue(" in text
     assert "'diagnostics_file': diagnostics_file" in text
-    assert "calibration_default = os.path.join(pkg, 'config', 'camera_tb4_0.yaml')" in text
-    assert "default_value=calibration_default" in text
+    assert "f'camera_{robot_ns_name}.yaml'" in text
+    assert "DeclareLaunchArgument(\n            'calibration_file',\n            default_value=_UNSET" in text
     assert "DeclareLaunchArgument('prefer_camera_info', default_value='false')" in text
     assert "'prefer_camera_info': ParameterValue(prefer_camera_info, value_type=bool)" in text
     assert "'min_landmark_observations': ParameterValue(" in text
@@ -87,6 +87,28 @@ def test_tb4_0_yaml_uses_catedra_calibration_with_full_distortion_coeffs():
     assert data['marker_size_m'] == 0.0889
 
 
+def test_tb4_1_yaml_uses_catedra_calibration_with_full_distortion_coeffs():
+    config_path = Path(__file__).resolve().parents[1] / 'config' / 'camera_tb4_1.yaml'
+    data = yaml.safe_load(config_path.read_text())
+
+    assert data['camera_matrix'] == [
+        [201.37, 0.0, 123.78],
+        [0.0, 357.31, 131.25],
+        [0.0, 0.0, 1.0],
+    ]
+    assert data['dist_coeffs'] == [
+        7.823812007904053,
+        -116.5168228149414,
+        0.0008780899806879461,
+        0.000634733063634485,
+        378.764404296875,
+        7.6177897453308105,
+        -114.77053833007812,
+        373.6795654296875,
+    ]
+    assert data['marker_size_m'] == 0.0889
+
+
 def test_aruco_detector_can_keep_yaml_calibration_when_requested():
     node_path = (
         Path(__file__).resolve().parents[1] / 'tp_a_slam_aruco'
@@ -128,6 +150,8 @@ def test_mapping_launch_exposes_log_odds_controls():
         'log_odds_max',
         'occupied_thresh',
         'free_thresh',
+        'max_obstacle_range',
+        'max_raytrace_range',
     ):
         assert f"DeclareLaunchArgument('{argument}'" in text
         assert f"'{argument}': LaunchConfiguration('{argument}')" in text
@@ -146,6 +170,8 @@ def test_occupancy_grid_uses_configurable_log_odds_and_export_thresholds():
         'log_odds_max',
         'occupied_thresh',
         'free_thresh',
+        'max_obstacle_range',
+        'max_raytrace_range',
     ):
         assert f"declare_parameter('{parameter}'" in text
         assert f"get_parameter('{parameter}')" in text
@@ -156,6 +182,8 @@ def test_occupancy_grid_uses_configurable_log_odds_and_export_thresholds():
     assert 'self.log_odds_max' in text
     assert 'self.pgm_occ_thresh' in text
     assert 'self.pgm_free_thresh' in text
+    assert 'self.max_obstacle_range' in text
+    assert 'self.max_raytrace_range' in text
 
 
 def test_occupancy_grid_reports_lidar_tf_and_fallback_sources():
@@ -193,6 +221,34 @@ def test_occupancy_grid_queues_scans_until_dense_odom_brackets_them():
     ):
         assert f"DeclareLaunchArgument('{argument}'" in launch
         assert f"'{argument}': LaunchConfiguration('{argument}')" in launch
+
+
+def test_mapping_launch_exposes_lidar_projection_debug_overlays():
+    launch_path = Path(__file__).resolve().parents[1] / 'launch' / 'parte_a_mapa.launch.py'
+    text = launch_path.read_text()
+
+    for argument in (
+        'publish_debug_overlays',
+        'debug_scan_publish_every',
+        'debug_scan_topic',
+        'debug_trajectory_topic',
+        'debug_landmarks_topic',
+    ):
+        assert f"'{argument}'" in text
+        assert f"'{argument}':" in text
+
+
+def test_occupancy_grid_publishes_projected_lidar_debug_overlays():
+    node_path = (
+        Path(__file__).resolve().parents[1] / 'tp_a_slam_aruco'
+        / 'occupancy_grid_node.py')
+    text = node_path.read_text()
+
+    assert 'debug_scan_pub' in text
+    assert '_publish_projected_scan_debug' in text
+    assert '_publish_static_debug_overlays' in text
+    assert "Marker.POINTS" in text
+    assert "Path()" in text
 
 
 def test_readme_documents_two_pass_outputs_and_raw_detection_topic():

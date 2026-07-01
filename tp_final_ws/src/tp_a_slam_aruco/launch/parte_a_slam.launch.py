@@ -55,7 +55,12 @@ def _launch_nodes(context, pkg):
         bag_tf_static_topic=bag_tf_static_topic,
     )
 
-    calibration_file = LaunchConfiguration('calibration_file')
+    robot_ns_name = profile.robot_namespace.strip('/').replace('/', '_')
+    calibration_file = _override(
+        context,
+        'calibration_file',
+        os.path.join(pkg, 'config', f'camera_{robot_ns_name}.yaml'),
+    )
     prefer_camera_info = LaunchConfiguration('prefer_camera_info')
     camera_frame = LaunchConfiguration('camera_frame')
     kf_dist = LaunchConfiguration('kf_dist')
@@ -219,7 +224,6 @@ def _launch_nodes(context, pkg):
 def generate_launch_description():
     pkg = get_package_share_directory('tp_a_slam_aruco')
     rviz_default_config = os.path.join(pkg, 'config', 'rviz_config.rviz')
-    calibration_default = os.path.join(pkg, 'config', 'camera_tb4_0.yaml')
 
     return LaunchDescription([
         DeclareLaunchArgument(
@@ -235,8 +239,8 @@ def generate_launch_description():
         DeclareLaunchArgument('run_id', default_value='manual'),
         DeclareLaunchArgument(
             'calibration_file',
-            default_value=calibration_default,
-            description='Ruta al YAML con K y coeficientes de distorsión.',
+            default_value=_UNSET,
+            description='Ruta al YAML con K y distorsión; default: config/camera_<robot_namespace>.yaml.',
         ),
         DeclareLaunchArgument('prefer_camera_info', default_value='false'),
         DeclareLaunchArgument(

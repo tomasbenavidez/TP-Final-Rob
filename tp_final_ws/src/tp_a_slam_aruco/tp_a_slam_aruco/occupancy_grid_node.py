@@ -43,14 +43,16 @@ import rclpy.time
 from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
 from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy
+from geometry_msgs.msg import Point, PoseStamped
 from sensor_msgs.msg import LaserScan
-from nav_msgs.msg import OccupancyGrid, Odometry
+from nav_msgs.msg import OccupancyGrid, Odometry, Path
 from tf2_ros import Buffer, TransformListener
+from visualization_msgs.msg import Marker, MarkerArray
 
 from tp_a_slam_aruco.motion_model import yaw_from_quaternion, normalize_angle
 from tp_a_slam_aruco.scan_projection import (
     fallback_sensor_pose_in_map,
-    iter_valid_scan_points,
+    iter_mapping_scan_points,
     sensor_pose_in_map,
 )
 from tp_a_slam_aruco.scan_odom_buffer import ScanOdomBuffer
@@ -116,6 +118,13 @@ class OccupancyGridNode(Node):
         self.declare_parameter('log_odds_max', _DEFAULT_L_MAX)
         self.declare_parameter('occupied_thresh', _DEFAULT_PGM_OCC_THRESH)
         self.declare_parameter('free_thresh', _DEFAULT_PGM_FREE_THRESH)
+        self.declare_parameter('max_obstacle_range', 2.0)
+        self.declare_parameter('max_raytrace_range', 2.5)
+        self.declare_parameter('publish_debug_overlays', True)
+        self.declare_parameter('debug_scan_publish_every', 10)
+        self.declare_parameter('debug_scan_topic', '/mapping_debug/projected_scan')
+        self.declare_parameter('debug_trajectory_topic', '/mapping_debug/trajectory')
+        self.declare_parameter('debug_landmarks_topic', '/mapping_debug/landmarks')
 
         self.resolution    = self.get_parameter('resolution').value
         self.map_output    = self.get_parameter('map_output').value
@@ -133,6 +142,12 @@ class OccupancyGridNode(Node):
         self.log_odds_max = float(self.get_parameter('log_odds_max').value)
         self.pgm_occ_thresh = float(self.get_parameter('occupied_thresh').value)
         self.pgm_free_thresh = float(self.get_parameter('free_thresh').value)
+        self.max_obstacle_range = float(self.get_parameter('max_obstacle_range').value)
+        self.max_raytrace_range = float(self.get_parameter('max_raytrace_range').value)
+        self.publish_debug_overlays = bool(
+            self.get_parameter('publish_debug_overlays').value)
+        self.debug_scan_publish_every = int(
+            self.get_parameter('debug_scan_publish_every').value)
 
         # Cargar trayectoria corregida desde JSON
         traj_path = self.get_parameter('trajectory_file').value
@@ -218,6 +233,25 @@ class OccupancyGridNode(Node):
         self.tf_listener = TransformListener(self.tf_buffer, self)
 
         self.map_pub = self.create_publisher(OccupancyGrid, '/map', 10)
+        self.debug_scan_pub = None
+        self.debug_trajectory_pub = None
+        self.debug_landmarks_pub = None
+        if self.publish_debug_overlays:
+            self.debug_scan_pub = self.create_publisher(
+                Marker,
+                self.get_parameter('debug_scan_topic').value,
+                10,
+            )
+            self.debug_trajectory_pub = self.create_publisher(
+                Path,
+                self.get_parameter('debug_trajectory_topic').value,
+                10,
+            )
+            self.debug_landmarks_pub = self.create_publisher(
+                MarkerArray,
+                self.get_parameter('debug_landmarks_topic').value,
+                10,
+            )
 
         best_effort = QoSProfile(
             reliability=ReliabilityPolicy.BEST_EFFORT,
@@ -254,8 +288,12 @@ class OccupancyGridNode(Node):
             f'max_angular_velocity={self.max_angular_velocity}. '
             f'log_odds occ={self.log_odds_occ} free={self.log_odds_free} '
             f'clip=[{self.log_odds_min},{self.log_odds_max}] '
-            f'pgm_thresh occ={self.pgm_occ_thresh} free={self.pgm_free_thresh}.'
+            f'pgm_thresh occ={self.pgm_occ_thresh} free={self.pgm_free_thresh}. '
+            f'mapping_range obstacle={self.max_obstacle_range} '
+            f'raytrace={self.max_raytrace_range}. '
+            f'debug_overlays={self.publish_debug_overlays}.'
         )
+        self._publish_static_debug_overlays()
 
     # ------------------------------------------------------------------ #
     #  Utilidades de coordenadas y geometría                               #
@@ -376,14 +414,7 @@ class OccupancyGridNode(Node):
 
     def integrate_scan(self, sensor_pose, scan: LaserScan):
         """Proyecta un barrido LaserScan en la grilla desde la pose del sensor."""
-        lx, ly, lth = sensor_pose
-        gx0, gy0 = self._world_to_grid(lx, ly)
-
-        for sx, sy, _angle, _range in iter_valid_scan_points(scan):
-            wx = lx + sx * math.cos(lth) - sy * math.sin(lth)
-            wy = ly + sx * math.sin(lth) + sy * math.cos(lth)
-            gx1, gy1 = self._world_to_grid(wx, wy)
-
+        for _wx, _wy, gx0, gy0, gx1, gy1, mark_obstacle in self._project_scan_hits(sensor_pose, scan):
             cells = self._bresenham(gx0, gy0, gx1, gy1)
 
             # Celdas libres (todas menos la de impacto)
@@ -392,11 +423,29 @@ class OccupancyGridNode(Node):
                     v = self.log_odds[cy, cx] + self.log_odds_free
                     self.log_odds[cy, cx] = max(self.log_odds_min, v)
 
+            if not mark_obstacle:
+                continue
+
             # Celda de impacto → ocupada
             cx, cy = cells[-1]
             if self._in_bounds(cx, cy):
                 v = self.log_odds[cy, cx] + self.log_odds_occ
                 self.log_odds[cy, cx] = min(self.log_odds_max, v)
+
+    def _project_scan_hits(self, sensor_pose, scan: LaserScan):
+        """Proyecta endpoints válidos del scan a map y conserva sus celdas."""
+        lx, ly, lth = sensor_pose
+        gx0, gy0 = self._world_to_grid(lx, ly)
+
+        for sx, sy, _angle, _range, mark_obstacle in iter_mapping_scan_points(
+            scan,
+            max_obstacle_range=self.max_obstacle_range,
+            max_raytrace_range=self.max_raytrace_range,
+        ):
+            wx = lx + sx * math.cos(lth) - sy * math.sin(lth)
+            wy = ly + sx * math.sin(lth) + sy * math.cos(lth)
+            gx1, gy1 = self._world_to_grid(wx, wy)
+            yield wx, wy, gx0, gy0, gx1, gy1, mark_obstacle
 
     # ------------------------------------------------------------------ #
     #  Callback de scan                                                    #
@@ -440,6 +489,10 @@ class OccupancyGridNode(Node):
             return
         self.integrate_scan(sensor_pose, msg)
         self.scan_count += 1
+        if (self.publish_debug_overlays and
+                self.debug_scan_publish_every > 0 and
+                self.scan_count % self.debug_scan_publish_every == 0):
+            self._publish_projected_scan_debug(sensor_pose, msg)
         if self.scan_count % self.publish_every == 0:
             self.get_logger().info(
                 f'Scans integrados: {self.scan_count} '
@@ -451,6 +504,7 @@ class OccupancyGridNode(Node):
                 f'esperando_odom={self.scan_odom_buffer.waiting_count}, '
                 f'gap_odom_ms={interpolation_gap_ms:.1f})')
             self.publish_map()
+            self._publish_static_debug_overlays()
 
     def finalize_scan_buffer(self):
         dropped = self.scan_odom_buffer.finalize()
@@ -488,6 +542,83 @@ class OccupancyGridNode(Node):
         msg.info.origin.orientation.w = 1.0
         msg.data = occ
         self.map_pub.publish(msg)
+
+    def _publish_static_debug_overlays(self):
+        if not self.publish_debug_overlays:
+            return
+        if self.debug_trajectory_pub is not None:
+            self.debug_trajectory_pub.publish(self._build_debug_trajectory_path())
+        if self.debug_landmarks_pub is not None:
+            self.debug_landmarks_pub.publish(self._build_debug_landmark_markers())
+
+    def _build_debug_trajectory_path(self):
+        msg = Path()
+        msg.header.stamp = self.get_clock().now().to_msg()
+        msg.header.frame_id = 'map'
+        for pose in self.trajectory:
+            ps = PoseStamped()
+            ps.header = msg.header
+            ps.pose.position.x = float(pose['x'])
+            ps.pose.position.y = float(pose['y'])
+            ps.pose.position.z = 0.02
+            half = float(pose['theta']) * 0.5
+            ps.pose.orientation.z = math.sin(half)
+            ps.pose.orientation.w = math.cos(half)
+            msg.poses.append(ps)
+        return msg
+
+    def _build_debug_landmark_markers(self):
+        msg = MarkerArray()
+        stamp = self.get_clock().now().to_msg()
+        delete_all = Marker()
+        delete_all.header.frame_id = 'map'
+        delete_all.header.stamp = stamp
+        delete_all.action = Marker.DELETEALL
+        msg.markers.append(delete_all)
+        for index, (landmark_id, landmark) in enumerate(sorted(self.landmarks.items())):
+            marker = Marker()
+            marker.header.frame_id = 'map'
+            marker.header.stamp = stamp
+            marker.ns = 'slam_landmarks'
+            marker.id = int(landmark_id) if str(landmark_id).isdigit() else index
+            marker.type = Marker.SPHERE
+            marker.action = Marker.ADD
+            marker.pose.position.x = float(landmark['x'])
+            marker.pose.position.y = float(landmark['y'])
+            marker.pose.position.z = 0.08
+            marker.pose.orientation.w = 1.0
+            marker.scale.x = 0.14
+            marker.scale.y = 0.14
+            marker.scale.z = 0.14
+            marker.color.r = 0.0
+            marker.color.g = 1.0
+            marker.color.b = 0.1
+            marker.color.a = 0.9
+            msg.markers.append(marker)
+        return msg
+
+    def _publish_projected_scan_debug(self, sensor_pose, scan):
+        if self.debug_scan_pub is None:
+            return
+        marker = Marker()
+        marker.header.frame_id = 'map'
+        marker.header.stamp = scan.header.stamp
+        marker.ns = 'projected_lidar_hits'
+        marker.id = 0
+        marker.type = Marker.POINTS
+        marker.action = Marker.ADD
+        marker.pose.orientation.w = 1.0
+        marker.scale.x = max(0.025, float(self.resolution) * 0.6)
+        marker.scale.y = marker.scale.x
+        marker.color.r = 1.0
+        marker.color.g = 0.05
+        marker.color.b = 0.02
+        marker.color.a = 0.85
+        for wx, wy, _gx0, _gy0, _gx1, _gy1, mark_obstacle in self._project_scan_hits(sensor_pose, scan):
+            if not mark_obstacle:
+                continue
+            marker.points.append(Point(x=float(wx), y=float(wy), z=0.04))
+        self.debug_scan_pub.publish(marker)
 
     # Umbrales de generación del PGM. Los mismos valores se escriben en el YAML
     # para que nav2/map_server interprete el mapa exactamente como fue generado.
