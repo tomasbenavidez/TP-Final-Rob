@@ -67,10 +67,12 @@ from tp_a_slam_aruco.slam_mapping import (
 )
 from tp_a_slam_aruco.slam_io import read_trajectory_json
 
-_L_OCC  =  0.85   # evidencia de celda ocupada (≈ log(0.70/0.30))
-_L_FREE = -0.40   # evidencia de celda libre (asimétrico: más conservador al limpiar)
-_L_MIN  = -5.0
-_L_MAX  =  5.0
+_DEFAULT_L_OCC  =  0.85   # evidencia de celda ocupada (≈ log(0.70/0.30))
+_DEFAULT_L_FREE = -0.40   # evidencia de celda libre (asimétrico: más conservador al limpiar)
+_DEFAULT_L_MIN  = -5.0
+_DEFAULT_L_MAX  =  5.0
+_DEFAULT_PGM_OCC_THRESH = 0.60
+_DEFAULT_PGM_FREE_THRESH = 0.40
 
 
 class OccupancyGridNode(Node):
@@ -108,6 +110,12 @@ class OccupancyGridNode(Node):
         self.declare_parameter('max_odom_buffer_samples', 4000)
         self.declare_parameter('max_pending_scans', 500)
         self.declare_parameter('max_scan_wait_seconds', 1.0)
+        self.declare_parameter('log_odds_occ', _DEFAULT_L_OCC)
+        self.declare_parameter('log_odds_free', _DEFAULT_L_FREE)
+        self.declare_parameter('log_odds_min', _DEFAULT_L_MIN)
+        self.declare_parameter('log_odds_max', _DEFAULT_L_MAX)
+        self.declare_parameter('occupied_thresh', _DEFAULT_PGM_OCC_THRESH)
+        self.declare_parameter('free_thresh', _DEFAULT_PGM_FREE_THRESH)
 
         self.resolution    = self.get_parameter('resolution').value
         self.map_output    = self.get_parameter('map_output').value
@@ -119,6 +127,12 @@ class OccupancyGridNode(Node):
         self.lidar_fallback_enabled = bool(
             self.get_parameter('lidar_fallback_enabled').value)
         self.max_angular_velocity = float(self.get_parameter('max_angular_velocity').value)
+        self.log_odds_occ = float(self.get_parameter('log_odds_occ').value)
+        self.log_odds_free = float(self.get_parameter('log_odds_free').value)
+        self.log_odds_min = float(self.get_parameter('log_odds_min').value)
+        self.log_odds_max = float(self.get_parameter('log_odds_max').value)
+        self.pgm_occ_thresh = float(self.get_parameter('occupied_thresh').value)
+        self.pgm_free_thresh = float(self.get_parameter('free_thresh').value)
 
         # Cargar trayectoria corregida desde JSON
         traj_path = self.get_parameter('trajectory_file').value
@@ -237,7 +251,10 @@ class OccupancyGridNode(Node):
             f'base_frame={self.base_frame}. '
             f'LIDAR fallback enabled={self.lidar_fallback_enabled} '
             f'tx={self.lidar_tx} ty={self.lidar_ty} yaw={self.lidar_yaw:.4f}. '
-            f'max_angular_velocity={self.max_angular_velocity}.'
+            f'max_angular_velocity={self.max_angular_velocity}. '
+            f'log_odds occ={self.log_odds_occ} free={self.log_odds_free} '
+            f'clip=[{self.log_odds_min},{self.log_odds_max}] '
+            f'pgm_thresh occ={self.pgm_occ_thresh} free={self.pgm_free_thresh}.'
         )
 
     # ------------------------------------------------------------------ #
@@ -372,14 +389,14 @@ class OccupancyGridNode(Node):
             # Celdas libres (todas menos la de impacto)
             for cx, cy in cells[:-1]:
                 if self._in_bounds(cx, cy):
-                    v = self.log_odds[cy, cx] + _L_FREE
-                    self.log_odds[cy, cx] = max(_L_MIN, v)
+                    v = self.log_odds[cy, cx] + self.log_odds_free
+                    self.log_odds[cy, cx] = max(self.log_odds_min, v)
 
             # Celda de impacto → ocupada
             cx, cy = cells[-1]
             if self._in_bounds(cx, cy):
-                v = self.log_odds[cy, cx] + _L_OCC
-                self.log_odds[cy, cx] = min(_L_MAX, v)
+                v = self.log_odds[cy, cx] + self.log_odds_occ
+                self.log_odds[cy, cx] = min(self.log_odds_max, v)
 
     # ------------------------------------------------------------------ #
     #  Callback de scan                                                    #
@@ -453,7 +470,11 @@ class OccupancyGridNode(Node):
     # ------------------------------------------------------------------ #
 
     def publish_map(self):
-        occ = log_odds_to_occupancy(self.log_odds.flatten())
+        occ = log_odds_to_occupancy(
+            self.log_odds.flatten(),
+            occupied_threshold=self.pgm_occ_thresh,
+            free_threshold=self.pgm_free_thresh,
+        )
 
         msg = OccupancyGrid()
         msg.header.stamp = self.get_clock().now().to_msg()
@@ -474,8 +495,6 @@ class OccupancyGridNode(Node):
     #   pixel   0 → p=1.00 > 0.60 → OCCUPIED
     #   pixel 127 → p=0.50, entre 0.40 y 0.60 → UNKNOWN
     #   pixel 254 → p=0.00 < 0.40 → FREE
-    _PGM_OCC_THRESH  = 0.60
-    _PGM_FREE_THRESH = 0.40
     _PGM_UNKNOWN_PX  = 127   # p=0.498 ≈ 0.5, cae exactamente entre los dos umbrales
 
     def export_map(self, path_prefix: str):
@@ -483,8 +502,8 @@ class OccupancyGridNode(Node):
         prob = 1.0 / (1.0 + np.exp(-self.log_odds))
 
         pgm = np.full((self.height, self.width), self._PGM_UNKNOWN_PX, dtype=np.uint8)
-        pgm[prob >= self._PGM_OCC_THRESH]  = 0
-        pgm[prob <= self._PGM_FREE_THRESH] = 254
+        pgm[prob >= self.pgm_occ_thresh]  = 0
+        pgm[prob <= self.pgm_free_thresh] = 254
 
         # ROS: fila 0 es y mínimo. PGM: fila 0 es y máximo → invertir verticalmente
         pgm = np.flipud(pgm)
@@ -502,8 +521,8 @@ class OccupancyGridNode(Node):
             f.write(f'resolution: {self.resolution}\n')
             f.write(f'origin: [{self.origin_x:.4f}, {self.origin_y:.4f}, 0.0]\n')
             f.write('negate: 0\n')
-            f.write(f'occupied_thresh: {self._PGM_OCC_THRESH}\n')
-            f.write(f'free_thresh: {self._PGM_FREE_THRESH}\n')
+            f.write(f'occupied_thresh: {self.pgm_occ_thresh}\n')
+            f.write(f'free_thresh: {self.pgm_free_thresh}\n')
 
         self.get_logger().info(
             f'Mapa exportado → {pgm_path} '

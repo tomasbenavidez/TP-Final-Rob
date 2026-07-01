@@ -117,6 +117,47 @@ def test_mapping_launch_exposes_scan_tf_and_fallback_controls():
     assert "DeclareLaunchArgument('max_angular_velocity', default_value='0.6')" in text
 
 
+def test_mapping_launch_exposes_log_odds_controls():
+    launch_path = Path(__file__).resolve().parents[1] / 'launch' / 'parte_a_mapa.launch.py'
+    text = launch_path.read_text()
+
+    for argument in (
+        'log_odds_occ',
+        'log_odds_free',
+        'log_odds_min',
+        'log_odds_max',
+        'occupied_thresh',
+        'free_thresh',
+    ):
+        assert f"DeclareLaunchArgument('{argument}'" in text
+        assert f"'{argument}': LaunchConfiguration('{argument}')" in text
+
+
+def test_occupancy_grid_uses_configurable_log_odds_and_export_thresholds():
+    node_path = (
+        Path(__file__).resolve().parents[1] / 'tp_a_slam_aruco'
+        / 'occupancy_grid_node.py')
+    text = node_path.read_text()
+
+    for parameter in (
+        'log_odds_occ',
+        'log_odds_free',
+        'log_odds_min',
+        'log_odds_max',
+        'occupied_thresh',
+        'free_thresh',
+    ):
+        assert f"declare_parameter('{parameter}'" in text
+        assert f"get_parameter('{parameter}')" in text
+
+    assert 'self.log_odds_free' in text
+    assert 'self.log_odds_occ' in text
+    assert 'self.log_odds_min' in text
+    assert 'self.log_odds_max' in text
+    assert 'self.pgm_occ_thresh' in text
+    assert 'self.pgm_free_thresh' in text
+
+
 def test_occupancy_grid_reports_lidar_tf_and_fallback_sources():
     node_path = (
         Path(__file__).resolve().parents[1] / 'tp_a_slam_aruco'

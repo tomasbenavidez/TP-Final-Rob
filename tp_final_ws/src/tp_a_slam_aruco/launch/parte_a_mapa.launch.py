@@ -93,6 +93,12 @@ def _launch_nodes(context):
             'max_odom_buffer_samples': LaunchConfiguration('max_odom_buffer_samples'),
             'max_pending_scans': LaunchConfiguration('max_pending_scans'),
             'max_scan_wait_seconds': LaunchConfiguration('max_scan_wait_seconds'),
+            'log_odds_occ': LaunchConfiguration('log_odds_occ'),
+            'log_odds_free': LaunchConfiguration('log_odds_free'),
+            'log_odds_min': LaunchConfiguration('log_odds_min'),
+            'log_odds_max': LaunchConfiguration('log_odds_max'),
+            'occupied_thresh': LaunchConfiguration('occupied_thresh'),
+            'free_thresh': LaunchConfiguration('free_thresh'),
         }],
     )
 
@@ -165,5 +171,11 @@ def generate_launch_description():
         DeclareLaunchArgument('max_odom_buffer_samples', default_value='4000'),
         DeclareLaunchArgument('max_pending_scans', default_value='500'),
         DeclareLaunchArgument('max_scan_wait_seconds', default_value='1.0'),
+        DeclareLaunchArgument('log_odds_occ', default_value='0.85'),
+        DeclareLaunchArgument('log_odds_free', default_value='-0.40'),
+        DeclareLaunchArgument('log_odds_min', default_value='-5.0'),
+        DeclareLaunchArgument('log_odds_max', default_value='5.0'),
+        DeclareLaunchArgument('occupied_thresh', default_value='0.60'),
+        DeclareLaunchArgument('free_thresh', default_value='0.40'),
         OpaqueFunction(function=_launch_nodes),
     ])
