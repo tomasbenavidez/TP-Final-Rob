@@ -51,7 +51,8 @@ class ArucoDetectorNode(Node):
 
         # --- Parámetros ---
         self.declare_parameter('image_topic', 'tb4_0/oakd/rgb/preview/image_raw')
-        self.declare_parameter('calibration_file', '')  # ruta al yaml de K y coefs (fallback)
+        self.declare_parameter('calibration_file', '')  # ruta al yaml de K y coefs
+        self.declare_parameter('prefer_camera_info', True)
         self.declare_parameter('marker_length', 0.0889)  # lado del ArUco en metros
         self.declare_parameter('aruco_dict', 'DICT_4X4_50')
         # frame_id del frame de la cámara; si está vacío se usa el del mensaje.
@@ -69,6 +70,7 @@ class ArucoDetectorNode(Node):
 
         image_topic = self.get_parameter('image_topic').value
         calib_file = self.get_parameter('calibration_file').value
+        self.prefer_camera_info = bool(self.get_parameter('prefer_camera_info').value)
         self.marker_length = self.get_parameter('marker_length').value
         dict_name = self.get_parameter('aruco_dict').value
         self.camera_frame = self.get_parameter('camera_frame').value
@@ -90,23 +92,24 @@ class ArucoDetectorNode(Node):
         self._diag_writer = None
         self._detection_frame_count = 0
 
-        # Calibración de la cámara: se obtiene del tópico camera_info (fuente
-        # canónica y siempre consistente con el bag). El YAML es fallback por
-        # si el tópico no está disponible. Nota: el modelo rational_polynomial
-        # del OAK-D usa 8 coeficientes de distorsión, no 5.
+        # Calibración de la cámara. Por default se prefiere camera_info para
+        # usos generales, pero se puede fijar el YAML de cátedra con
+        # prefer_camera_info:=false para corridas diagnósticas reproducibles.
         self.camera_matrix = None
         self.dist_coeffs = None
         self._calib_from_topic = False  # True cuando ya recibimos camera_info
+        self._camera_info_ignored_logged = False
 
         if calib_file:
             try:
                 self.camera_matrix, self.dist_coeffs, marker_size = load_camera_calibration(calib_file)
-                self.get_logger().info(f'Calibración fallback cargada desde {calib_file}')
+                self.get_logger().info(f'Calibración YAML cargada desde {calib_file}')
                 if marker_size is not None:
                     try:
                         self.marker_length = float(marker_size)
                     except Exception:
                         pass
+                self._log_active_calibration(source='yaml')
             except Exception as e:
                 self.get_logger().warn(f'No se pudo cargar calibración YAML: {e}')
 
@@ -120,7 +123,13 @@ class ArucoDetectorNode(Node):
             depth=1,
         )
         self.create_subscription(CameraInfo, info_topic, self._camera_info_cb, _best_effort)
-        self.get_logger().info(f'Esperando calibración desde "{info_topic}"...')
+        if self.prefer_camera_info:
+            self.get_logger().info(f'Esperando calibración desde "{info_topic}"...')
+        else:
+            self.get_logger().info(
+                f'prefer_camera_info=false; se conserva la calibración YAML '
+                f'y se ignora "{info_topic}".'
+            )
 
         # Diccionario de ArUco. El TB4 de la cátedra usa un diccionario
         # concreto; ajustar el parámetro aruco_dict si no detecta nada.
@@ -164,13 +173,16 @@ class ArucoDetectorNode(Node):
         )
 
     def _camera_info_cb(self, msg: CameraInfo):
-        """Toma la calibración directamente del tópico camera_info del driver.
+        """Toma la calibración del tópico camera_info si está habilitado."""
+        if not self.prefer_camera_info:
+            if not self._camera_info_ignored_logged:
+                self.get_logger().info(
+                    'camera_info recibido pero prefer_camera_info=false; '
+                    'se mantiene la calibración source=yaml.'
+                )
+                self._camera_info_ignored_logged = True
+            return
 
-        Es la fuente canónica: siempre coincide con el bag/cámara real,
-        soporta el modelo rational_polynomial (8 coeficientes) del OAK-D,
-        y evita errores por YAML desactualizado. Se ejecuta solo hasta
-        recibir el primer mensaje válido.
-        """
         if self._calib_from_topic:
             return  # ya inicializado; no recalcular en cada frame
 
@@ -184,10 +196,19 @@ class ArucoDetectorNode(Node):
         self.dist_coeffs = np.array(D, dtype=np.float64).reshape(1, -1)
         self._calib_from_topic = True
 
+        self._log_active_calibration(source='camera_info', distortion_model=msg.distortion_model)
+
+    def _log_active_calibration(self, source, distortion_model=''):
+        if self.camera_matrix is None or self.dist_coeffs is None:
+            return
+        coeff_count = int(np.asarray(self.dist_coeffs).reshape(-1).size)
+        model_part = f' modelo={distortion_model}' if distortion_model else ''
+        k = self.camera_matrix
         self.get_logger().info(
-            f'Calibración recibida desde camera_info '
-            f'(modelo={msg.distortion_model}, {len(D)} coefs). '
-            f'fx={K[0]:.2f} fy={K[4]:.2f} cx={K[2]:.2f} cy={K[5]:.2f}'
+            f'Calibración activa source={source}{model_part} '
+            f'({coeff_count} coefs). '
+            f'fx={k[0, 0]:.2f} fy={k[1, 1]:.2f} '
+            f'cx={k[0, 2]:.2f} cy={k[1, 2]:.2f}'
         )
 
     def image_callback(self, msg: Image):
