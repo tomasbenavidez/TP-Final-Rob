@@ -28,6 +28,11 @@ class ArucoGeometryObservation:
     pose_x: float
     pose_y: float
     pose_theta: float
+    detection_stamp: float | None = None
+    pose_stamp: float | None = None
+    detection_pose_dt: float | None = None
+    pose_source: str = ''
+    odom_interpolation_gap_ms: float | None = None
     predicted_landmark_x: float | None = None
     predicted_landmark_y: float | None = None
     spatial_jump: float | None = None
@@ -77,6 +82,23 @@ def build_geometry_debug_row(observation, landmark_x=None, landmark_y=None):
         'range': f'{observation.range_:.6f}',
         'bearing': f'{observation.bearing:.6f}',
         'pose_index': int(observation.pose_index),
+        'detection_stamp': (
+            f'{float(observation.detection_stamp):.9f}'
+            if observation.detection_stamp is not None else ''
+        ),
+        'pose_stamp': (
+            f'{float(observation.pose_stamp):.9f}'
+            if observation.pose_stamp is not None else ''
+        ),
+        'detection_pose_dt': (
+            f'{float(observation.detection_pose_dt):.6f}'
+            if observation.detection_pose_dt is not None else ''
+        ),
+        'pose_source': observation.pose_source,
+        'odom_interpolation_gap_ms': (
+            f'{float(observation.odom_interpolation_gap_ms):.3f}'
+            if observation.odom_interpolation_gap_ms is not None else ''
+        ),
         'pose_x': f'{observation.pose_x:.6f}',
         'pose_y': f'{observation.pose_y:.6f}',
         'pose_theta': f'{observation.pose_theta:.6f}',

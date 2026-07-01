@@ -2,6 +2,7 @@ import json
 import math
 import csv
 import os
+from bisect import bisect_left
 from dataclasses import replace
 import numpy as np
 
@@ -25,6 +26,7 @@ from tp_a_slam_aruco.slam_gating import (
     resolve_gate_state,
     spatial_landmark_gate_from_values,
 )
+from tp_a_slam_aruco.scan_odom_buffer import interpolate_bracketed
 from tp_a_slam_aruco.slam_geometry import (
     CameraExtrinsics,
     TB4_CAMERA_EXTRINSICS,
@@ -68,6 +70,10 @@ class GraphSlamNode(Node):
         self.declare_parameter('max_marker_depth', 5.0)
         self.declare_parameter('min_landmark_observations', 3)
         self.declare_parameter('max_landmark_position_jump', 0.75)
+        self.declare_parameter('detection_keyframe_tolerance', 0.10)
+        self.declare_parameter('max_pending_detections', 500)
+        self.declare_parameter('max_detection_wait_seconds', 1.0)
+        self.declare_parameter('max_odom_buffer_samples', 4000)
         self.declare_parameter('map_frame', 'map')
         self.declare_parameter('odom_frame', 'odom')
         self.declare_parameter('base_frame', 'base_link')
@@ -97,6 +103,18 @@ class GraphSlamNode(Node):
         )
         self.max_landmark_position_jump = float(
             self.get_parameter('max_landmark_position_jump').value
+        )
+        self.detection_keyframe_tolerance = float(
+            self.get_parameter('detection_keyframe_tolerance').value
+        )
+        self.max_pending_detections = int(
+            self.get_parameter('max_pending_detections').value
+        )
+        self.max_detection_wait_seconds = float(
+            self.get_parameter('max_detection_wait_seconds').value
+        )
+        self.max_odom_buffer_samples = int(
+            self.get_parameter('max_odom_buffer_samples').value
         )
         self.map_frame = self.get_parameter('map_frame').value
         self.odom_frame = self.get_parameter('odom_frame').value
@@ -130,6 +148,9 @@ class GraphSlamNode(Node):
         self.kf_odom_poses: list = []
 
         self.last_odom_stamp = None
+        self.odom_samples = []
+        self.dropped_stale_detections = 0
+        self.dropped_pending_overflow = 0
         self._warned_camera_tf_fallback = False
         # Usamos reloj de pared para que el timer se dispare a 20 Hz
         # independientemente de si se está reproduciendo un bag con --clock.
@@ -172,7 +193,7 @@ class GraphSlamNode(Node):
         self.path_pub = self.create_publisher(Path, '/trajectory_optimized', 10)
         self.base_debug_pub = self.create_publisher(MarkerArray, base_debug_topic, 10)
 
-        self.pending_detections = {}
+        self.pending_detections = []
 
         self.get_logger().info(
             f'graph_slam_node activo. odom={odom_topic} detecciones={lm_topic} '
@@ -182,6 +203,7 @@ class GraphSlamNode(Node):
             f'marker_depth=[{self.min_marker_depth}, {self.max_marker_depth}] '
             f'min_landmark_observations={self.min_landmark_observations} '
             f'max_landmark_position_jump={self.max_landmark_position_jump} '
+            f'detection_keyframe_tolerance={self.detection_keyframe_tolerance} '
             f'reobs_min_parallax={self.reobs_min_parallax} '
             f'tf={self.map_frame}->{self.odom_frame}')
 
@@ -204,12 +226,16 @@ class GraphSlamNode(Node):
         odom_pose = (p.position.x, p.position.y, yaw)
 
         self.last_odom_stamp = msg.header.stamp
+        odom_stamp = msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9
+        self._add_odom_sample(odom_stamp, odom_pose)
 
         if self.last_odom_pose is None:
             self.last_odom_pose = odom_pose
             self.last_kf_pose = odom_pose
-            self._add_first_pose()
+            self._add_first_pose(odom_stamp)
             return
+
+        self._process_ready_detections(newest_odom_stamp=odom_stamp)
 
         dx = odom_pose[0] - self.last_kf_pose[0]
         dy = odom_pose[1] - self.last_kf_pose[1]
@@ -217,8 +243,13 @@ class GraphSlamNode(Node):
         turned = abs(normalize_angle(odom_pose[2] - self.last_kf_pose[2]))
 
         if moved >= self.kf_dist or turned >= self.kf_angle_max:
-            self._add_keyframe(self.last_kf_pose, odom_pose)
-            self.last_kf_pose = odom_pose
+            pose_index = self._add_keyframe(
+                self.last_kf_pose,
+                odom_pose,
+                odom_stamp,
+                'motion_keyframe',
+            )
+            self._after_observations_added([], pose_index)
 
         self.last_odom_pose = odom_pose
 
@@ -238,18 +269,47 @@ class GraphSlamNode(Node):
         except Exception:
             pass
 
-    def _add_first_pose(self):
+    def _add_odom_sample(self, stamp, odom_pose):
+        stamp = float(stamp)
+        sample = (stamp, tuple(odom_pose))
+        stamps = [item[0] for item in self.odom_samples]
+        index = bisect_left(stamps, stamp)
+        if index < len(self.odom_samples) and self.odom_samples[index][0] == stamp:
+            self.odom_samples[index] = sample
+        else:
+            self.odom_samples.insert(index, sample)
+        overflow = len(self.odom_samples) - self.max_odom_buffer_samples
+        if overflow > 0:
+            del self.odom_samples[:overflow]
+
+    def _odom_bracket_gap_ms(self, stamp):
+        if not self.odom_samples:
+            return None
+        stamps = [item[0] for item in self.odom_samples]
+        index = bisect_left(stamps, stamp)
+        if index < len(self.odom_samples) and self.odom_samples[index][0] == stamp:
+            return 0.0
+        if index == 0 or index == len(self.odom_samples):
+            return None
+        return (self.odom_samples[index][0] - self.odom_samples[index - 1][0]) * 1000.0
+
+    def _odom_at_detection(self, stamp):
+        odom_pose = interpolate_bracketed(self.odom_samples, stamp)
+        if odom_pose is None:
+            return None, None
+        return odom_pose, self._odom_bracket_gap_ms(stamp)
+
+    def _add_first_pose(self, stamp):
         self.graph.add(gtsam.PriorFactorPose2(
             X(0), Pose2(0.0, 0.0, 0.0), self.prior_noise))
         self.initial.insert(X(0), Pose2(0.0, 0.0, 0.0))
         self.pose_count = 1
         self.kf_world_pose = (0.0, 0.0, 0.0)
-        s = self.last_odom_stamp
-        self.kf_stamps.append(s.sec + s.nanosec * 1e-9 if s else 0.0)
+        self.kf_stamps.append(float(stamp))
         self.kf_odom_poses.append(tuple(self.last_kf_pose))
         self.get_logger().info('Grafo inicializado: prior en X(0)=origen')
 
-    def _add_keyframe(self, prev_odom_pose, curr_odom_pose):
+    def _add_keyframe(self, prev_odom_pose, curr_odom_pose, stamp, pose_source):
         """Crea un nuevo keyframe y conecta con BetweenFactor usando Pose2.between().
 
         Pose2.between() calcula T_prev^{-1} * T_curr (Lie group), la pose relativa
@@ -265,31 +325,23 @@ class GraphSlamNode(Node):
         prev_est = self.initial.atPose2(X(i - 1))
         self.initial.insert(X(i), prev_est.compose(relative_pose))
         self.pose_count += 1
-        s = self.last_odom_stamp
-        self.kf_stamps.append(s.sec + s.nanosec * 1e-9 if s else 0.0)
+        self.kf_stamps.append(float(stamp))
         self.kf_odom_poses.append(tuple(curr_odom_pose))
 
         current_pose = self.initial.atPose2(X(i))
         self.kf_world_pose = (current_pose.x(), current_pose.y(), current_pose.theta())
 
-        # Adjuntamos TODAS las observaciones pendientes (incluso keyframes de giro):
-        # el modelo de ruido obs_noise maneja la incertidumbre, no hay que descartar.
-        observed_lm_ids = list(self.pending_detections.keys())
-        for pending in self.pending_detections.values():
-            self._add_observation(i, pending)
-        self.pending_detections.clear()
-
-        # Fix: last_kf_pose must reflect curr_odom_pose before publish_map_to_odom
-        # reads it, otherwise the map→odom TF is off by one keyframe delta.
         self.last_kf_pose = curr_odom_pose
+        return i
 
+    def _after_observations_added(self, observed_lm_ids, pose_index):
         if (self.pose_count % self.optimize_every) == 0:
             self.optimize()
             # Refresh last_obs_pose for this keyframe's landmarks using the
             # optimized pose, so the next parallax check uses corrected coords.
             if self.result is not None:
                 try:
-                    opt_pose = self.result.atPose2(X(i))
+                    opt_pose = self.result.atPose2(X(pose_index))
                     opt_xy = (opt_pose.x(), opt_pose.y())
                     for lm_id in observed_lm_ids:
                         self.last_obs_pose[lm_id] = opt_xy
@@ -297,6 +349,85 @@ class GraphSlamNode(Node):
                     pass
             self.publish_belief()
             self._flush_geometry_debug()
+
+    def _nearest_pose_index(self, stamp):
+        if not self.kf_stamps:
+            return None, None
+        index = bisect_left(self.kf_stamps, stamp)
+        candidates = []
+        if index < len(self.kf_stamps):
+            candidates.append(index)
+        if index > 0:
+            candidates.append(index - 1)
+        pose_index = min(candidates, key=lambda i: abs(self.kf_stamps[i] - stamp))
+        return pose_index, self.kf_stamps[pose_index]
+
+    def _pose_for_detection(self, pending):
+        stamp = pending['stamp']
+        pose_index, pose_stamp = self._nearest_pose_index(stamp)
+        if pose_index is not None:
+            dt = pose_stamp - stamp
+            if abs(dt) <= self.detection_keyframe_tolerance:
+                return pose_index, pose_stamp, 'existing_keyframe'
+            if stamp < self.kf_stamps[-1]:
+                return None, pose_stamp, 'dropped_stale'
+
+        odom_pose = pending.get('odom_pose')
+        if odom_pose is None:
+            return None, None, 'waiting_odom'
+        pose_index = self._add_keyframe(
+            self.last_kf_pose,
+            odom_pose,
+            stamp,
+            'created_detection_keyframe',
+        )
+        return pose_index, stamp, 'created_detection_keyframe'
+
+    def _process_ready_detections(self, newest_odom_stamp):
+        ready = []
+        waiting = []
+        for pending in self.pending_detections:
+            odom_pose, gap_ms = self._odom_at_detection(pending['stamp'])
+            if odom_pose is None:
+                if newest_odom_stamp - pending['stamp'] > self.max_detection_wait_seconds:
+                    self._record_dropped_observation(pending, 'dropped_stale')
+                else:
+                    waiting.append(pending)
+                continue
+            enriched = dict(pending)
+            enriched['odom_pose'] = odom_pose
+            enriched['odom_interpolation_gap_ms'] = gap_ms
+            ready.append(enriched)
+        self.pending_detections = waiting
+
+        selected = {}
+        pose_meta = {}
+        for pending in sorted(ready, key=lambda item: item['stamp']):
+            pose_index, pose_stamp, pose_source = self._pose_for_detection(pending)
+            if pose_index is None:
+                self._record_dropped_observation(
+                    pending,
+                    pose_source,
+                    pose_index=self.pose_count - 1 if self.pose_count else None,
+                    pose_stamp=pose_stamp,
+                )
+                continue
+            pending = dict(pending)
+            pending['pose_stamp'] = pose_stamp
+            pending['detection_pose_dt'] = pose_stamp - pending['stamp']
+            pending['pose_source'] = pose_source
+            key = (pose_index, pending['id'])
+            existing = selected.get(key)
+            if existing is None or pending['range'] < existing['range']:
+                selected[key] = pending
+                pose_meta[pose_index] = pose_stamp
+
+        observed_by_pose = {}
+        for (pose_index, _marker_id), pending in selected.items():
+            self._add_observation(pose_index, pending)
+            observed_by_pose.setdefault(pose_index, []).append(pending['id'])
+        for pose_index, observed_ids in observed_by_pose.items():
+            self._after_observations_added(observed_ids, pose_index)
 
     # ============================================================
     #  Callback de detecciones ArUco
@@ -326,11 +457,7 @@ class GraphSlamNode(Node):
                 'bearing': float(brg),
             }
             debug_markers.append(pending)
-            # Guardamos la detección más cercana: obs_noise crece con rango^2,
-            # por lo que la observación más próxima tiene menor incertidumbre.
-            existing = self.pending_detections.get(m.id)
-            if existing is None or rng < existing['range']:
-                self.pending_detections[m.id] = pending
+            self._queue_detection(pending)
 
         if debug_markers:
             self.base_debug_pub.publish(
@@ -340,6 +467,19 @@ class GraphSlamNode(Node):
                     debug_markers,
                 )
             )
+
+    def _queue_detection(self, pending):
+        index = bisect_left(
+            [item['stamp'] for item in self.pending_detections],
+            pending['stamp'],
+        )
+        self.pending_detections.insert(index, pending)
+        overflow = len(self.pending_detections) - self.max_pending_detections
+        if overflow > 0:
+            for stale in self.pending_detections[:overflow]:
+                self._record_dropped_observation(stale, 'pending_overflow')
+            del self.pending_detections[:overflow]
+            self.dropped_pending_overflow += overflow
 
     def _marker_to_base_xy(self, marker, tx, ty, tz):
         """Convierte una detección en frame cámara a XY del robot.
@@ -428,11 +568,43 @@ class GraphSlamNode(Node):
         except Exception:
             return base
 
+    def _record_dropped_observation(self, pending, reason, pose_index=None, pose_stamp=None):
+        if pose_index is None:
+            pose_index = self.pose_count - 1 if self.pose_count else 0
+        debug_pose = self._pose_for_debug(pose_index)
+        if pose_stamp is None and pose_index < len(self.kf_stamps):
+            pose_stamp = self.kf_stamps[pose_index]
+        self.geometry_observations.append(ArucoGeometryObservation(
+            stamp=pending['stamp'],
+            marker_id=pending['id'],
+            frame_id=pending['frame_id'],
+            tf_source=pending['tf_source'],
+            tx=pending['tx'],
+            ty=pending['ty'],
+            tz=pending['tz'],
+            x_base=pending['x_base'],
+            y_base=pending['y_base'],
+            range_=pending['range'],
+            bearing=pending['bearing'],
+            pose_index=pose_index,
+            pose_x=debug_pose.x(),
+            pose_y=debug_pose.y(),
+            pose_theta=debug_pose.theta(),
+            detection_stamp=pending['stamp'],
+            pose_stamp=pose_stamp,
+            detection_pose_dt=(pose_stamp - pending['stamp']) if pose_stamp is not None else None,
+            pose_source='dropped_stale' if reason == 'dropped_stale' else reason,
+            odom_interpolation_gap_ms=pending.get('odom_interpolation_gap_ms'),
+            reject_reason=reason,
+        ))
+        self.dropped_stale_detections += int(reason == 'dropped_stale')
+        self._flush_geometry_debug()
+
     def _add_observation(self, pose_index, pending):
         landmark_id = pending['id']
         range_ = pending['range']
         bearing = pending['bearing']
-        px, py = self._current_robot_xy()
+        px, py = self._robot_xy_for_pose(pose_index)
         debug_pose = self._pose_for_debug(pose_index)
         geometry_observation = ArucoGeometryObservation(
             stamp=pending['stamp'],
@@ -450,6 +622,11 @@ class GraphSlamNode(Node):
             pose_x=debug_pose.x(),
             pose_y=debug_pose.y(),
             pose_theta=debug_pose.theta(),
+            detection_stamp=pending.get('stamp'),
+            pose_stamp=pending.get('pose_stamp'),
+            detection_pose_dt=pending.get('detection_pose_dt'),
+            pose_source=pending.get('pose_source', ''),
+            odom_interpolation_gap_ms=pending.get('odom_interpolation_gap_ms'),
         )
         self.geometry_observations.append(geometry_observation)
 
@@ -518,6 +695,14 @@ class GraphSlamNode(Node):
         self.last_obs_pose[landmark_id] = (px, py)
         self._flush_geometry_debug()
 
+
+    def _robot_xy_for_pose(self, pose_index):
+        values = self.result if self.result is not None else self.initial
+        try:
+            pose = values.atPose2(X(pose_index))
+            return pose.x(), pose.y()
+        except Exception:
+            return self.kf_world_pose[0], self.kf_world_pose[1]
     def _current_robot_xy(self):
         """Devuelve la mejor estimación disponible de la posición actual."""
         if self.result is not None and self.pose_count > 0:
@@ -572,6 +757,11 @@ class GraphSlamNode(Node):
                     pose_x=pose.x(),
                     pose_y=pose.y(),
                     pose_theta=pose.theta(),
+                    detection_stamp=observation.detection_stamp,
+                    pose_stamp=observation.pose_stamp,
+                    detection_pose_dt=observation.detection_pose_dt,
+                    pose_source=observation.pose_source,
+                    odom_interpolation_gap_ms=observation.odom_interpolation_gap_ms,
                     predicted_landmark_x=observation.predicted_landmark_x,
                     predicted_landmark_y=observation.predicted_landmark_y,
                     spatial_jump=observation.spatial_jump,
@@ -604,6 +794,11 @@ class GraphSlamNode(Node):
                         'range',
                         'bearing',
                         'pose_index',
+                        'detection_stamp',
+                        'pose_stamp',
+                        'detection_pose_dt',
+                        'pose_source',
+                        'odom_interpolation_gap_ms',
                         'pose_x',
                         'pose_y',
                         'pose_theta',
