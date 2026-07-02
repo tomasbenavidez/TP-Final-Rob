@@ -50,6 +50,75 @@ class SimulationContractsTest(unittest.TestCase):
         self.assertIn('landmark_source=aruco', source)
         self.assertNotIn("profile.landmark_source == 'aruco' and profile.launch_virtual_landmarks", source)
 
+    def test_landmark_sensor_publishes_identified_observations_for_mcl(self):
+        source = (PACKAGE_ROOT / 'tp_b_navigation' / 'landmark_sensor.py').read_text()
+
+        self.assertIn('LandmarkObservationArray', source)
+        self.assertIn("'/observed_landmark_ids'", source)
+        self.assertIn('observation.landmark_id = int(index)', source)
+
+    def test_mcl_exposes_hybrid_likelihood_parameters_in_launch(self):
+        source = (PACKAGE_ROOT / 'launch' / 'parte_b.launch.py').read_text()
+
+        for parameter in (
+            'use_landmark_likelihood',
+            'use_laser_likelihood',
+            'laser_max_beams',
+            'laser_sigma_hit',
+            'laser_max_distance',
+            'max_landmark_measurement_age',
+            'diagnostics_csv',
+        ):
+            self.assertIn(f"DeclareLaunchArgument('{parameter}'", source)
+            self.assertIn(f"'{parameter}':", source)
+
+    def test_bag_localization_launch_is_passive_and_uses_hybrid_mcl(self):
+        launch_path = PACKAGE_ROOT / 'launch' / 'parte_b_bag_localization.launch.py'
+        self.assertTrue(launch_path.is_file())
+        source = launch_path.read_text()
+
+        for executable in (
+            "executable='map_loader'",
+            "executable='mcl_localization'",
+            "executable='aruco_detector'",
+            "executable='aruco_mcl_adapter'",
+        ):
+            self.assertIn(executable, source)
+        self.assertNotIn("executable='state_machine'", source)
+        self.assertNotIn("executable='global_planner'", source)
+        self.assertNotIn("executable='obstacle_monitor'", source)
+        self.assertNotIn("'/cmd_vel'", source)
+        self.assertIn("'use_laser_likelihood': use_laser_likelihood", source)
+        self.assertIn("'landmark_map_file': landmark_map_file", source)
+        self.assertIn("'diagnostics_csv': diagnostics_csv", source)
+        self.assertIn("'odom_frame': odom_frame", source)
+        self.assertIn(
+            "'compensate_delayed_observations': compensate_delayed_observations",
+            source)
+        self.assertIn("'max_compensation_age': max_compensation_age", source)
+        self.assertIn(
+            "'compensation_diagnostics_csv': compensation_diagnostics_csv",
+            source)
+        self.assertIn("default_value='bag_tb4'", source)
+
+    def test_bag_localization_launch_exposes_oos_landmark_mode(self):
+        source = (
+            PACKAGE_ROOT / 'launch' / 'parte_b_bag_localization.launch.py'
+        ).read_text()
+
+        for argument in (
+            'use_oos_landmark_updates',
+            'oos_max_observation_age',
+            'oos_history_duration',
+            'oos_max_snapshot_gap',
+        ):
+            self.assertIn(f"DeclareLaunchArgument('{argument}'", source)
+            self.assertIn(f"'{argument}':", source)
+        self.assertIn(
+            "if use_oos_landmark_updates:\n"
+            "        compensate_delayed_observations = False",
+            source)
+
     def test_part_b_routes_selected_tf_topics_to_tf_consumers(self):
         source = (PACKAGE_ROOT / 'launch' / 'parte_b.launch.py').read_text()
 
@@ -71,6 +140,7 @@ class SimulationContractsTest(unittest.TestCase):
         adapter = source.index("executable='aruco_mcl_adapter'")
         adapter_block = source[adapter:source.find('),', adapter) + 2]
         self.assertIn('remappings=tf_remaps', adapter_block)
+        self.assertIn('aruco_compensation_params', adapter_block)
 
     def test_part_b_preserves_stage_artifact_and_remaps_rviz_sensors(self):
         source = (PACKAGE_ROOT / 'launch' / 'parte_b.launch.py').read_text()
@@ -157,6 +227,27 @@ class SimulationContractsTest(unittest.TestCase):
 
         self.assertEqual(profile.odom_topic, '/tb4_1/odom')
         self.assertEqual(profile.reference_odom_topic, '/tb4_1/odom')
+
+    def test_c_real_passes_aruco_compensation_parameters(self):
+        source = (
+            REPO_ROOT / 'tp_final_ws' / 'src' / 'tp_c_mission' / 'launch'
+            / 'parte_c_real.launch.py').read_text()
+
+        for argument in (
+            'compensate_delayed_observations',
+            'max_compensation_age',
+            'compensation_diagnostics_csv',
+        ):
+            self.assertIn('DeclareLaunchArgument', source)
+            self.assertIn(f"'{argument}'", source)
+        self.assertIn("'odom_frame': odom_frame", source)
+        self.assertIn(
+            "'compensate_delayed_observations': compensate_delayed_observations",
+            source)
+        self.assertIn("'max_compensation_age': max_compensation_age", source)
+        self.assertIn(
+            "'compensation_diagnostics_csv': compensation_diagnostics_csv",
+            source)
 
     def test_part_a_exposes_tb4_odometry_default(self):
         launch_dir = (

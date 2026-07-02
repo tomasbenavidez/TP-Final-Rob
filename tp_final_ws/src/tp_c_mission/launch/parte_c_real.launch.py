@@ -51,6 +51,16 @@ def _launch_nodes(context, mission_share, config):
         context, 'tf_static_topic', profile.tf_static_topic)
     base_frame = _override(context, 'base_frame', profile.base_frame)
     odom_frame = _override(context, 'odom_frame', profile.odom_frame)
+    use_oos_landmark_updates = _bool_arg(context, 'use_oos_landmark_updates')
+    oos_max_observation_age = float(_arg(context, 'oos_max_observation_age'))
+    oos_history_duration = float(_arg(context, 'oos_history_duration'))
+    oos_max_snapshot_gap = float(_arg(context, 'oos_max_snapshot_gap'))
+    compensate_delayed_observations = _bool_arg(
+        context, 'compensate_delayed_observations')
+    if use_oos_landmark_updates:
+        compensate_delayed_observations = False
+    max_compensation_age = float(_arg(context, 'max_compensation_age'))
+    compensation_diagnostics_csv = _arg(context, 'compensation_diagnostics_csv')
     localization_safety_params = {
         'enable_safety_gates': _bool_arg(context, 'enable_safety_gates'),
         'max_mcl_pose_age': float(_arg(context, 'max_mcl_pose_age')),
@@ -116,6 +126,10 @@ def _launch_nodes(context, mission_share, config):
                           'odom_frame': odom_frame,
                           'motion_odom_topic': odom_topic,
                           'reference_odom_topic': odom_topic,
+                          'use_oos_landmark_updates': use_oos_landmark_updates,
+                          'oos_max_observation_age': oos_max_observation_age,
+                          'oos_history_duration': oos_history_duration,
+                          'oos_max_snapshot_gap': oos_max_snapshot_gap,
                           'use_sim_time': use_sim_time}], remappings=common_remaps),
         Node(package='tp_b_navigation', executable='global_planner', output='screen',
              parameters=[{'base_frame': base_frame,
@@ -135,7 +149,11 @@ def _launch_nodes(context, mission_share, config):
                           'use_sim_time': use_sim_time}]),
         Node(package='tp_b_navigation', executable='aruco_mcl_adapter', output='screen',
              parameters=[{'base_frame': base_frame,
+                          'odom_frame': odom_frame,
                           'allow_latest_tf_fallback': False,
+                          'compensate_delayed_observations': compensate_delayed_observations,
+                          'max_compensation_age': max_compensation_age,
+                          'compensation_diagnostics_csv': compensation_diagnostics_csv,
                           'use_sim_time': use_sim_time}],
              remappings=tf_remaps),
         Node(package='tp_c_mission', executable='red_cone_detector', output='screen',
@@ -173,6 +191,15 @@ def generate_launch_description():
         DeclareLaunchArgument('tf_static_topic', default_value=_UNSET),
         DeclareLaunchArgument('base_frame', default_value=_UNSET),
         DeclareLaunchArgument('odom_frame', default_value=_UNSET),
+        DeclareLaunchArgument('use_oos_landmark_updates', default_value='false'),
+        DeclareLaunchArgument('oos_max_observation_age', default_value='4.0'),
+        DeclareLaunchArgument('oos_history_duration', default_value='6.0'),
+        DeclareLaunchArgument('oos_max_snapshot_gap', default_value='0.15'),
+        DeclareLaunchArgument('compensate_delayed_observations', default_value='true'),
+        DeclareLaunchArgument('max_compensation_age', default_value='4.0'),
+        DeclareLaunchArgument(
+            'compensation_diagnostics_csv',
+            default_value='/tmp/aruco_mcl_compensation.csv'),
         DeclareLaunchArgument('enable_safety_gates', default_value='true'),
         DeclareLaunchArgument('max_mcl_pose_age', default_value='1.0'),
         DeclareLaunchArgument('max_scan_age', default_value='1.0'),
