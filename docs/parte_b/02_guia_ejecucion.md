@@ -133,6 +133,48 @@ El perfil real usa `/tb4_0/odom`, `/tb4_0/scan`, `/tb4_0/cmd_vel` y la cámara
 OAK-D derivadas de `robot_namespace`. Agrega `aruco_detector` y
 `aruco_mcl_adapter` para alimentar `/observed_landmark_ids` al MCL. No inicia
 `landmark_publisher`, `landmark_sensor`, `/calc_odom`, drivers TB4 ni Graph SLAM.
+El MCL no hace SLAM: usa el mapa ya cargado en `/map`, la odometría, los ArUco
+identificados y el LIDAR contra la grilla para estimar `map→odom`.
+
+Para una prueba pasiva sobre bag, usá el launch pasivo: no inicia planner,
+`state_machine`, `obstacle_monitor` ni ningún productor de `/cmd_vel`.
+
+```bash
+ros2 launch tp_b_navigation parte_b_bag_localization.launch.py \
+  profile:=bag_tb4 \
+  map_yaml:=/tmp/tb4-run/map/map.yaml \
+  landmark_map_file:=/tmp/tb4-run/parte_a/trayectoria.json \
+  diagnostics_csv:=/tmp/tp_mcl_laberinto.csv \
+  compensation_diagnostics_csv:=/tmp/aruco_mcl_compensation.csv
+```
+
+Para probar la corrección fuera de secuencia de ArUco, activá OOS en MCL. En
+ese modo el adapter deja de compensar el atraso y publica el timestamp original
+de la imagen; MCL corrige una nube histórica en `t_obs`, la repropaga con
+odometría hasta `now` y reemplaza la nube actual:
+
+```bash
+ros2 launch tp_b_navigation parte_b_bag_localization.launch.py \
+  profile:=bag_tb4 \
+  map_yaml:=/tmp/tb4-run/map/map.yaml \
+  landmark_map_file:=/tmp/tb4-run/parte_a/trayectoria.json \
+  laser_log_weight:=0.25 \
+  use_oos_landmark_updates:=true \
+  diagnostics_csv:=/tmp/tp_mcl_laberinto_oos.csv
+```
+
+En otra terminal reproducí el bag con clock:
+
+```bash
+ros2 bag play tp_final_ws/bags/laberinto --clock
+```
+
+Después publicá una pose inicial aproximada desde RViz o por CLI:
+
+```bash
+ros2 topic pub --once /initialpose geometry_msgs/msg/PoseWithCovarianceStamped \
+"{header: {frame_id: map}, pose: {pose: {position: {x: 0.0, y: 0.0}, orientation: {w: 1.0}}}}"
+```
 
 Si `map_yaml` o `landmark_map_file` quedan en defaults flexibles, el launch avisa
 por consola. En `real_tb4` quedan activos los safety gates:
@@ -140,6 +182,24 @@ por consola. En `real_tb4` quedan activos los safety gates:
 `max_position_covariance` y `max_yaw_covariance`. Estos gates frenan movimiento
 autónomo e inserción de obstáculos dinámicos si la pose MCL, la covarianza, la TF
 o el scan no son confiables.
+
+El CSV de diagnóstico es opcional. Cuando `diagnostics_csv` no está vacío, MCL
+agrega una fila por corrección de medición (`event=laser`, `event=landmark` o
+`event=landmark_oos`).
+Las columnas más útiles para diagnosticar saltos son `delta_xy`, `delta_yaw`,
+`n_eff_before`, `n_eff_after`, `resampled`, `used` y `detail`. Si un salto grande
+aparece en una fila `laser`, el likelihood del LIDAR está dominando; si aparece
+en una fila `landmark` o `landmark_oos`, revisar asociación/TF/calibración de
+ArUco. En OOS, `detail` agrega `age_sec`, `snapshot_dt_sec` y `replay_steps`.
+
+En TB4 real/bag, `aruco_mcl_adapter` compensa observaciones visuales retardadas
+usando la odometría relativa entre el timestamp de la imagen y el tiempo actual.
+La medición conserva su `observation.header.stamp` original, pero el array
+`/observed_landmark_ids` se publica con stamp actual para que MCL la trate como
+una observación compensada. El archivo `compensation_diagnostics_csv` permite
+auditar `age_sec`, `compensated`, `drop_reason` y el movimiento relativo usado.
+Comparar junto con `/tmp/aruco_image_timing.csv` ayuda a distinguir delay de
+cámara, compensación aplicada y saltos finales de MCL.
 
 ---
 
@@ -163,6 +223,7 @@ La config `parte_b.rviz` ya trae los displays. Fixed frame = `map`.
 | Map | `/map` | la grilla de ocupación de la casa |
 | Landmarks GT | `/landmarks_markers` | 60 estrellas/cilindros verdes sobre las paredes |
 | Observed Landmarks | `/observed_landmarks_markers` | puntos naranjas: lo que la "cámara" ve este frame |
+| Observed Landmark IDs | `/observed_landmark_ids` | mediciones range/bearing con ID explícito para el MCL |
 | LaserScan | `/scan` | el LIDAR (best_effort) |
 | MCL Particles | `/particlecloud` | la nube de partículas del filtro |
 | Path | `/plan` | la ruta A* al goal |
@@ -202,8 +263,9 @@ ros2 topic pub --once /goal_pose geometry_msgs/msg/PoseStamped \
   is at Y"*. Es un artefacto de **sim-time**: el plugin del LIDAR de Gazebo estampa el `/scan`
   ~20-60 ms **adelante** de su propia TF `odom→base`, y `/clock` llega al suscriptor con un poco de
   lag → el mensaje queda "en el futuro" para la TF por unos ms, RViz lo descarta y reintenta
-  (su *MessageFilter*) → **parpadea pero los markers igual aparecen**. No pierde dato ni afecta al
-  MCL/navegación (el MCL asocia por índice, no transforma). **Ya está mitigado en el código:**
+  (su *MessageFilter*) → **parpadea pero los markers igual aparecen**. La corrección por landmarks
+  del MCL no transforma esos markers en RViz; la corrección láser usa `/scan` y TF aparte.
+  **Ya está mitigado en el código:**
   (1) el MCL publica `map→odom` con el stamp adelantado `transform_tolerance=0.1 s` (truco de AMCL),
   y (2) el `landmark_sensor` estampa `/observed_landmarks` con el tiempo de la TF que realmente usó,
   no con el stamp futuro del scan. Con eso la transformación pasa ~100% al primer intento. Si

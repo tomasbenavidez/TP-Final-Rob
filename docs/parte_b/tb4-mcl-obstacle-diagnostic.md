@@ -21,6 +21,8 @@ Para una captura diagnóstica manual, grabar juntos:
 
 ```text
 /odom
+/map
+/scan
 /mcl_pose
 /particlecloud
 /observed_landmark_ids
@@ -43,14 +45,30 @@ grabar ni publicar sobre el `/cmd_vel` físico durante un smoke.
    odométricas ni aparecía `map -> odom`.
 2. Tras hacer compatible la suscripción de odometría, MCL avanzó y publicó
    estimación y nube entre observaciones ArUco.
+   La localización actual además compara `/scan` contra `/map`, por lo que el
+   bag debe grabarse siempre con ambos tópicos para diagnosticar la corrección
+   láser-mapa.
 3. El siguiente síntoma fue `/obstacle_monitor_healthy: false`: el scan más
    reciente podía llegar antes que el TF de su timestamp. El monitor ahora
    conserva ese scan acotadamente y lo reintenta cuando llega TF, sin consultar
    indiscriminadamente el TF “latest”.
+4. En localización pasiva de laboratorio se observó que la imagen RGB podía
+   llegar al callback ArUco unos 2.6-2.9 s después de su `header.stamp`,
+   mientras el LIDAR llegaba prácticamente fresco. MCL descarta landmarks viejos
+   y el adaptador ArUco puede compensar la medición retardada usando odometría
+   relativa antes de publicarla en `/observed_landmark_ids`.
 
 El orden observado fue, por tanto, divergencia/ausencia de localización antes
 que inserción falsa de obstáculos. No hubo evidencia que justificara cambiar
 ruido MCL, A*, inflación, TTL ni parámetros de evasión, y no se modificaron.
+
+Para auditar este caso temporal, guardar y comparar:
+
+```text
+/tmp/aruco_image_timing.csv
+/tmp/aruco_mcl_compensation.csv
+/tmp/tp_mcl_laberinto*.csv
+```
 
 ## Resultado local
 

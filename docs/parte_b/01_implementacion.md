@@ -19,10 +19,10 @@ ROS 2 Humble). **No se tocó nada de Parte A.**
  landmark_publisher ── /landmarks ──┐      │              │
                                     ▼       ▼              ▼
  /scan (Gazebo) ─────────► landmark_sensor  global_planner  obstacle_monitor
-                                    │               ▲              │
-                          /observed_landmarks       │ /plan_request │ /obstacle_detected
-                                    ▼               │              ▼
- /calc_odom ─────────────►   mcl_localization ──────┴──────► state_machine ──► /cmd_vel (Gazebo)
+        │                           │               ▲              │
+        │                 /observed_landmarks       │ /plan_request │ /obstacle_detected
+        ▼                 /observed_landmark_ids    │              ▼
+ /calc_odom ─────────────►   mcl_localization ◄─────┴──────► state_machine ──► /cmd_vel (Gazebo)
                                     │  TF map→odom                 │
                                     └──────────────────────────────┘ usa TF map→base
 ```
@@ -31,8 +31,8 @@ ROS 2 Humble). **No se tocó nada de Parte A.**
 |---|---|---|---|
 | `map_loader` | `map_loader` | `mapas/map_sim.yaml` | `/map` (`OccupancyGrid`, latched) |
 | `landmark_publisher` | `landmark_publisher` | param `landmarks` | `/landmarks` (`PoseArray`@map, latched), `/landmarks_markers` |
-| `landmark_sensor` | `landmark_sensor` | `/scan`, `/landmarks`, TF | `/observed_landmarks` (`PoseArray`), markers |
-| `mcl_localization` | `mcl_localization` | `/calc_odom`, `/odom` de referencia, `/observed_landmarks`, `/initialpose` | `/mcl_pose`, `/particlecloud`, **TF `map→odom`** |
+| `landmark_sensor` | `landmark_sensor` | `/scan`, `/landmarks`, TF | `/observed_landmarks` (`PoseArray`), `/observed_landmark_ids`, markers |
+| `mcl_localization` | `mcl_localization` | `/map`, `/scan`, `/calc_odom`, `/odom` de referencia, landmarks observados, `/initialpose` | `/mcl_pose`, `/particlecloud`, **TF `map→odom`** |
 | `global_planner` | `global_planner` | `/map`, `/plan_request`, TF | `/plan` (`Path`), `/plan_status` |
 | `obstacle_monitor` | `obstacle_monitor` | `/scan`, `/map`, TF | `/obstacle_detected` (`Bool`) |
 | `state_machine` | `state_machine` | `/initialpose`, `/goal_pose`, `/plan`, `/obstacle_detected`, TF | `/cmd_vel`, `/nav_state` (`String`), `/plan_request` |
@@ -95,14 +95,26 @@ Emula el detector ArUco que Gazebo no tiene. Por cada landmark conocido:
   sensor usa `odom→base` (en Gazebo la odometría es ~ground-truth y `map≡odom` en el origen).
 
 ### 3.4 `mcl_localization` (filtro de partículas — consigna 1.4)
-MCL con landmarks **conocidos y fijos** (a diferencia de FastSLAM del tp5, acá no se estiman).
+MCL con mapa y landmarks **conocidos y fijos**. No hace SLAM: Parte A o el mapper simulado
+producen el mapa; este nodo sólo estima la pose del robot.
 - **Predicción:** por cada `/calc_odom`, modelo de movimiento por odometría (δrot1, δtrans, δrot2 con
   ruido `alpha1..4`, Thrun cap. 5).
 - `/odom` de Gazebo se conserva separadamente como referencia para construir `map→odom`;
   no alimenta el modelo de movimiento.
-- **Corrección:** por cada `/observed_landmarks` visible, verosimilitud gaussiana range/bearing
-  contra el landmark conocido `i` (log-pesos, normalización estable, diferencia angular con
-  wraparound). Sólo corrige si hubo movimiento (`update_min_d/ a`).
+- **Corrección por landmarks:** acepta el contrato legacy `/observed_landmarks` por índice y el
+  contrato identificado `/observed_landmark_ids`. En simulación los IDs son `0..N-1`; en real/bag
+  son los IDs ArUco del JSON de Parte A (`landmark_map_file`). Si el JSON está cargado, no se
+  reemplaza por índices virtuales para evitar mezclar IDs.
+- **Corrección láser-mapa:** suscribe `/map` y `/scan`, construye un likelihood field desde las
+  celdas ocupadas y pesa las partículas según qué tan cerca caen los endpoints muestreados del
+  LIDAR de paredes del mapa. Partículas fuera del mapa, en desconocido o dentro de ocupado reciben
+  una penalización fuerte.
+- Las correcciones se disparan sólo si hubo movimiento (`update_min_d/update_min_a`) o una primera
+  observación tras `/initialpose`, para evitar degeneración estática.
+- **Corrección ArUco fuera de secuencia (opcional):** con `use_oos_landmark_updates=true`, si
+  `/observed_landmark_ids` llega tarde, MCL busca una nube histórica cercana al timestamp de la
+  imagen, aplica ahí la likelihood del ArUco, repropaga la nube con odometría hasta el presente y
+  reemplaza la nube actual. Esto evita atrasar toda la navegación y evita usar un offset fijo.
 - **Resampling** low-variance cuando `n_eff < N/2`, con **roughening** (jitter `rough_xy=0.03`,
   `rough_yaw=0.02`) post-resampling para evitar el empobrecimiento de la nube.
 - `num_particles=350`. Inicialización por `/initialpose` (RViz "2D Pose Estimate").
