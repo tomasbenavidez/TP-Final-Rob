@@ -2,6 +2,7 @@ import json
 import math
 import csv
 import os
+import signal
 from bisect import bisect_left
 from dataclasses import replace
 import numpy as np
@@ -949,13 +950,22 @@ def main(args=None):
     except (KeyboardInterrupt, ExternalShutdownException):
         pass
     finally:
-        node.save_trajectory()
+        _save_trajectory_ignoring_sigint(node)
         try:
             node.destroy_node()
         except KeyboardInterrupt:
             pass
         if rclpy.ok():
             rclpy.shutdown()
+
+
+def _save_trajectory_ignoring_sigint(node):
+    previous_handler = signal.getsignal(signal.SIGINT)
+    signal.signal(signal.SIGINT, signal.SIG_IGN)
+    try:
+        node.save_trajectory()
+    finally:
+        signal.signal(signal.SIGINT, previous_handler)
 
 
 if __name__ == '__main__':
