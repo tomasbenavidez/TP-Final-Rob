@@ -1,0 +1,22 @@
+\section{Discusión y Brecha Sim-to-Real}
+\label{sec:conclusion}
+
+El hilo conductor de las tres partes fue la \textbf{gestión rigurosa de la incertidumbre y del tiempo}. Varias de las decisiones de diseño más importantes no surgieron de la teoría sino de patologías observadas sobre datos reales o simulados: el desacople del sensor virtual de la estimación del filtro (sin el cual el MCL se realimentaba y divergía), el \emph{bracketing} temporal que nunca extrapola (que eliminó el emborronamiento de las paredes en el mapa), la compensación de la latencia de la imagen ArUco (2.6--2.9~s en el laboratorio) y el kernel robusto de Cauchy sobre los avistajes (que evita que un falso cierre de lazo arruine el grafo). Documentarlas es, a nuestro juicio, tan valioso como el resultado final.
+
+\textbf{Sobre la brecha sim-to-real.} La arquitectura fue diseñada explícitamente para minimizar esta brecha: la Parte~B corre sobre landmarks \emph{virtuales} calibrados en densidad y con oclusión geométrica para plantear ``un desafío matemático equivalente'' al del ArUco real, y el mismo nodo MCL acepta tanto los IDs virtuales de simulación como los IDs ArUco reales del \texttt{trajectory.json}. Los factores que anticipamos como principales fuentes de discrepancia en el robot físico son: (i)~el ruido y la deriva reales de la odometría del Create~3 frente a la odometría cuasi-perfecta de Gazebo; (ii)~la latencia y el \emph{motion blur} de la cámara OAK-D; (iii)~los cambios de iluminación del laboratorio sobre la segmentación HSV de los conos; y (iv)~el deslizamiento mecánico. Los \emph{gates} de seguridad y la compensación de latencia son las defensas preparadas de antemano contra (i)--(ii).
+
+\textbf{Limitaciones.} (1)~El planificador razona sobre el mapa estático, por lo que un obstáculo denso sobre la única ruta produce navegación ineficiente (falta un \emph{costmap local}). (2)~El cierre de lazo de la Parte~A depende de la re-observación de marcadores; en tramos largos sin ArUco visible la deriva sólo se corrige al reencontrar un marcador. (3)~La validación del sistema completo en hardware está pendiente de la ventana de laboratorio.
+
+\section{Conclusión y Trabajo Futuro}
+
+Presentamos la memoria técnica de un sistema robótico autónomo completo que integra SLAM visual con Graph SLAM y marcadores ArUco (Parte~A), navegación autónoma con localización por filtro de partículas, planificación A$^\star$ y una máquina de estados (Parte~B), y una capa de misión de exploración informativa con percepción de conos rojos (Parte~C). El sistema fue validado en simulación y sobre RosBags reales, alcanzando un error de seguimiento del MCL de $0.02$--$0.18$~m y evasión de obstáculos no mapeados sin colisión.
+
+\textbf{Contribuciones principales:}
+\begin{itemize}
+\item Pipeline de Graph SLAM de dos pasadas sobre datos reales, con modelo de medición ArUco caracterizado empíricamente y cierre de lazo por re-observación con triple compuerta.
+\item Sensor virtual de landmarks con oclusión geométrica, desacoplado de la estimación, que permite portar el Sistema~3 a simulación de forma consistente.
+\item Arquitectura de misión en capas que separa la decisión de \emph{a dónde} ir (exploración informativa) del \emph{cómo} moverse (FSM de navegación), reutilizando la pila de la Parte~B sin modificarla.
+\item Documentación honesta de las patologías de convergencia y sus correcciones verificadas con datos.
+\end{itemize}
+
+\textbf{Trabajo futuro:} (1)~completar la validación sobre el TurtleBot4 físico y el análisis cuantitativo de la brecha sim-to-real; (2)~incorporar un \emph{costmap local} para que A$^\star$ rodee obstáculos dinámicos en lugar de re-planear contra el mapa estático; (3)~añadir \emph{loop closure} geométrico por \emph{scan-matching} para robustecer la Parte~A en tramos sin marcadores; (4)~explorar una asociación de datos probabilística para los landmarks visuales en escenarios con IDs ambiguos; y (5)~endurecer la segmentación de conos ante iluminación variable mediante normalización de color o un detector aprendido.

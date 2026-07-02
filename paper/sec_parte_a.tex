@@ -1,0 +1,160 @@
+\section{Parte A: SLAM Visual con Graph SLAM y Marcadores ArUco}
+\label{sec:parte_a}
+
+\subsection{Elección del enfoque}
+La consigna ofrece tres caminos de implementación (Tabla~\ref{tab:opciones_a}). Elegimos la \textbf{Opción~3: features con cámara}, que trabaja sobre un RosBag con datos reales del TurtleBot4 y exige \emph{Graph SLAM} con cierre de lazo. Esta opción es la más realista y la más exigente: no dispone de \emph{ground truth}, sufre \emph{motion blur} y baja densidad de marcadores en algunas zonas, y obliga a corregir la deriva odométrica mediante la re-observación de landmarks. A cambio, produce un mapa geométrico de marcadores indexado por ID que las Partes~B y~C reutilizan directamente para localizar el robot físico.
+
+\begin{table}[h]
+\centering
+\caption{Opciones de implementación de la Parte A}
+\label{tab:opciones_a}
+\begin{tabular}{llll}
+\toprule
+\textbf{Opción} & \textbf{Entorno} & \textbf{Sensores} & \textbf{SLAM} \\
+\midrule
+1 & Gazebo & LIDAR & Grid FastSLAM \\
+2 & Gazebo & LIDAR & EKF/Graph (features) \\
+\textbf{3} & \textbf{RosBag TB4} & \textbf{Cámara+LIDAR} & \textbf{Graph SLAM} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+El procesamiento es de \textbf{dos pasadas} sobre el mismo bag (Fig.~\ref{fig:pipeline_a}): la primera optimiza el grafo de poses y landmarks para obtener la trayectoria corregida; la segunda proyecta el LIDAR sobre esa trayectoria para construir una grilla de ocupación consistente, evitando así la distorsión que produciría mapear con la odometría cruda.
+
+\begin{figure}[t]
+\centering
+\begin{tikzpicture}[node distance=2.6mm and 5mm]
+  \node[node2] (bag) {RosBag TB4\\\texttt{odom/scan/rgb}};
+  \node[node2, right=9mm of bag] (aruco) {Detector\\ArUco};
+  \node[node2, below=of aruco] (graph) {Graph SLAM\\(GTSAM, LM)};
+  \node[node2, below=of graph] (traj) {\texttt{trajectory}\\\texttt{.json}};
+  \node[node2, left=9mm of traj] (grid) {2\textsuperscript{a} pasada:\\grilla ocup.};
+  \node[node2, below=of grid] (map) {\texttt{map.pgm}\\\texttt{map.yaml}};
+  \draw[tr] (bag) -- (aruco);
+  \draw[tr] (aruco) -- node[right,topic]{range,bearing,id} (graph);
+  \draw[tr] (bag) |- (graph);
+  \draw[tr] (graph) -- (traj);
+  \draw[tr] (traj) -- (grid);
+  \draw[tr] (bag) |- (grid);
+  \draw[tr] (grid) -- (map);
+\end{tikzpicture}
+\caption{Pipeline de dos pasadas de la Parte~A. La primera pasada consolida el grafo de poses (odometría + avistajes ArUco) y exporta la trayectoria optimizada; la segunda re-proyecta el LIDAR sobre la trayectoria corregida para generar la grilla de ocupación.}
+\label{fig:pipeline_a}
+\end{figure}
+
+\subsection{Detección de marcadores y modelo de medición}
+El nodo detector emplea OpenCV \cite{opencv} con el diccionario \texttt{DICT\_4X4\_50} y un lado de marcador de $0.0889$~m. La pose 3D de cada tag se estima con \texttt{solvePnP} usando el solucionador \texttt{IPPE\_SQUARE}, óptimo para marcadores planos cuadrados, a partir de la matriz intrínseca $K$ y los coeficientes de distorsión $D$ provistos por la cátedra (calibración de la cámara del TB4~$\#0$). Cada detección devuelve la traslación $\mathbf{t}=(t_x,t_y,t_z)$ en el marco óptico de la cámara y el error de reproyección RMS.
+
+\textbf{Filtrado de detecciones (robustez ante datos reales):} descartamos las detecciones poco confiables antes de que entren al grafo, mitigando \emph{motion blur} y falsos positivos:
+\begin{itemize}
+\item área proyectada del marcador $< 250$~px (tags lejanos o borrosos);
+\item error de reproyección $> 4.0$~px (ajuste PnP inconsistente por desenfoque);
+\item profundidad $t_z$ fuera de $[0.05,\,3.0]$~m.
+\end{itemize}
+
+\textbf{De detección a observación range--bearing:} la traslación en el marco óptico se transforma al plano del robot. Se prefiere la TF real del bag (\texttt{base\_link}$\leftarrow$\texttt{camera}); si no está disponible dentro de la tolerancia, se recurre a los extrínsecos fijos del montaje del TB4 ($t_x=-0.0596$~m, $\text{yaw}=0$), mapeando el marco óptico ($z$ adelante, $x$ derecha) al plano como $(t_z,-t_x)$. Con la posición $(x_b,y_b)$ del marcador en el marco base se calcula la medición
+\begin{equation}
+r=\sqrt{x_b^2+y_b^2},\qquad \phi=\operatorname{atan2}(y_b,x_b).
+\end{equation}
+
+\textbf{Modelo de ruido dependiente de la distancia:} caracterizamos empíricamente (con la grabación \texttt{aruco\_estimation} de distancias controladas) las desviaciones estándar de la medición como funciones del rango,
+\begin{align}
+\sigma_\phi(r) &= 0.10 + 0.05\,r \quad[\text{rad}],\\
+\sigma_r(r) &= 0.0239 + 0.0315\,r^2 \quad[\text{m}],
+\end{align}
+de modo que las observaciones lejanas (más ruidosas por resolución angular y desenfoque) pesan menos en la optimización. La matriz de información del factor es $\operatorname{diag}(\sigma_\phi^{-2},\sigma_r^{-2})$.
+
+\subsection{Formulación del Graph SLAM}
+Implementamos el \emph{backend} sobre \textbf{GTSAM}, construyendo un grafo de factores no lineal \cite{grisetti}. Las variables son las poses del robot $X(i)\in SE(2)$ (\texttt{Pose2}, una por \emph{keyframe}) y los landmarks $L(\text{id})\in\mathbb{R}^2$ (\texttt{Point2}), donde la clave de cada landmark es su propio ID ArUco. Se crea un nuevo \emph{keyframe} cuando el robot se desplaza $\geq 0.15$~m o gira $\geq 0.60$~rad.
+
+El grafo contiene tres tipos de factores:
+\begin{enumerate}
+\item \textbf{Prior} sobre $X(0)$ anclando el origen, con $\boldsymbol{\sigma}=[0.01,0.01,0.005]$.
+\item \textbf{Odometría} (\texttt{BetweenFactorPose2}) entre poses consecutivas. La pose relativa se calcula con la operación del grupo de Lie $T_{i-1}^{-1}T_i$ (en vez de la descomposición manual de deltas), lo que es numéricamente más robusto ante giros grandes; su ruido $\boldsymbol{\sigma}=[0.3,0.3,0.1]$ se elige deliberadamente \emph{generoso} para que las restricciones de landmark tengan autoridad para corregir la deriva.
+\item \textbf{Avistaje} (\texttt{BearingRangeFactor2D}) entre $X(i)$ y $L(\text{id})$, con el ruido dependiente de la distancia.
+\end{enumerate}
+
+La optimización minimiza la suma de residuos de Mahalanobis al cuadrado
+\begin{equation}
+\mathbf{X}^\star=\arg\min_{\mathbf{X}}\sum_{k}\mathbf{e}_k(\mathbf{X})^\top\,\Omega_k\,\mathbf{e}_k(\mathbf{X}),
+\end{equation}
+resuelta con \textbf{Levenberg--Marquardt} (GTSAM linealiza cada factor con jacobianos analíticos). Tras cada optimización se reconstruye la estimación inicial desde el resultado (\emph{warm-start}). Para robustez ante outliers, los factores de avistaje se envuelven en un \textbf{kernel robusto de Cauchy} ($k=1.0$), que satura el aporte de mediciones aberrantes en lugar de dejarlas crecer cuadráticamente.
+
+\textbf{Inicialización de landmarks:} un marcador nuevo se agrega al grafo sólo tras observarse $\geq 3$ veces, con posición inicial $\mathbf{x}_i + r\,(\cos(\theta_i+\phi),\sin(\theta_i+\phi))$.
+
+\subsection{Cierre de lazo por re-observación}
+No usamos un \emph{loop closure} geométrico por \emph{scan-matching}; el cierre de lazo es \textbf{implícito por re-observación de landmarks}: cuando un marcador de ID ya conocido se vuelve a ver desde una pose distante en el tiempo, se agrega un nuevo factor de avistaje que ata ambas poses al mismo $L(\text{id})$, corrigiendo la deriva acumulada al regresar a zonas visitadas. Para evitar falsos cierres, cada re-observación debe superar tres compuertas:
+\begin{itemize}
+\item \textbf{Paralaje mínimo} de $0.20$~m desde la última observación del landmark (evita restricciones redundantes sin información);
+\item \textbf{Salto espacial}: se rechaza si la posición del landmark predicha desde la observación se aparta $> 0.75$~m de su estimación actual;
+\item \textbf{Innovación de Mahalanobis} $\chi^2_{2} < 5.99$ (umbral al 95\%), sobre $(\Delta\phi,\Delta r)$.
+\end{itemize}
+Además se limita a $50$ el número de factores por landmark para acotar el tamaño del grafo.
+
+\subsection{Sincronización temporal}
+Las detecciones ArUco y la odometría llegan con estampas de tiempo distintas. Interpolamos la pose de odometría al instante exacto de cada detección mediante \emph{bracketing}: se buscan las dos muestras de odometría que rodean la estampa y se interpola en $SE(2)$ (traslación lineal, ángulo por el camino corto). El diseño \textbf{nunca extrapola}: si no hay muestra a ambos lados, la detección espera; si envejece más de $1.0$~s sin \emph{bracket}, se descarta. Este mismo mecanismo se aplica en la segunda pasada para asignar a cada barrido LIDAR su pose corregida.
+
+\subsection{Segunda pasada: grilla de ocupación}
+Con la trayectoria optimizada, generamos la grilla mediante un \emph{inverse sensor model} con \textbf{log-odds}. La clave para un mapa nítido es la pose asignada a cada barrido: usamos un modo \emph{denso} que compone la corrección de SLAM interpolada entre \emph{keyframes} con la odometría densa de cada instante, $T_{\text{map}}(t)=T_{\text{corr}}(t)\circ T_{\text{odom}}(t)$, en lugar de interpolar linealmente poses dispersas.
+
+Cada rayo del LIDAR se traza con \textbf{Bresenham}: las celdas atravesadas reciben $L_{\text{free}}=-0.40$ y la celda de impacto $L_{\text{occ}}=+0.85$ (asimétrico, conservador al limpiar), saturando en $[-5,+5]$. La resolución es $0.05$~m/celda; se limpia espacio libre hasta $2.5$~m y se marca ocupado sólo hasta $2.0$~m. Los extrínsecos del LIDAR se leen de la TF; el \emph{fallback} fijo ($t_x=-0.04$, $\text{yaw}=+\pi/2$) refleja que el RPLIDAR está montado rotado $90^\circ$ respecto de \texttt{base\_link} (ignorarlo emborrona las paredes). Un \textbf{gate angular} descarta los barridos tomados mientras $|\omega|>0.6$~rad/s, cuando la pose angular es menos confiable. La grilla se exporta a formato \texttt{nav2 map\_server} (\texttt{.pgm}+\texttt{.yaml}, umbrales $0.60/0.40$).
+
+\subsection{Resultados}
+Sobre el bag del laberinto del TB4, la primera pasada consolidó \textbf{277 poses optimizadas} y \textbf{38 landmarks ArUco} únicos (IDs $0$--$47$ con huecos). La Fig.~\ref{fig:parte_a_traj} contrasta la odometría cruda con la trayectoria optimizada: la odometría acumula una deriva de varios metros, mientras que las restricciones de landmark cierran el recorrido de forma coherente. La segunda pasada produjo una grilla de $262\times231$ celdas a $0.05$~m (Fig.~\ref{fig:parte_a_map}), con las paredes principales continuas y las aberturas transitables preservadas.
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=0.90\columnwidth]{parte_a_trajectory.png}
+\caption{Parte~A: grafo de poses optimizado (azul) frente a la odometría cruda del TB4 (gris) y los 38 landmarks ArUco estimados (estrellas rojas). La deriva odométrica de varios metros se corrige por las re-observaciones de marcadores.}
+\label{fig:parte_a_traj}
+\end{figure}
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=0.72\columnwidth]{mapa_tb4_real.png}
+\caption{Grilla de ocupación del laberinto real (bag TB4) generada en la segunda pasada: $262\times231$ celdas a $0.05$~m. Negro: ocupado; blanco: libre; gris: desconocido.}
+\label{fig:parte_a_map}
+\end{figure}
+
+Para verificar la estabilidad del mapeo evaluamos el efecto del \emph{bracketing} de TF y del gate angular sobre un bag largo (1392.8~s, 10\,797 barridos). La Tabla~\ref{tab:mapa_comparacion} resume la comparación entre desactivar y activar el gate angular: ambas variantes integran prácticamente todos los barridos usando la TF real (un único \emph{fallback} por corrida), producen la misma cantidad de celdas ocupadas y difieren en una sola celda, confirmando que el \emph{bracketing} elimina el \emph{clamp} al último odom sin necesitar cambios de log-odds. Se conserva el gate desactivado por defecto.
+
+\begin{table}[h]
+\centering
+\caption{Estabilidad del mapeo (bag largo, 10\,797 barridos)}
+\label{tab:mapa_comparacion}
+\begin{tabular}{lcc}
+\toprule
+\textbf{Métrica} & \textbf{Sin gate} & \textbf{Gate 0.35} \\
+\midrule
+Barridos integrados & 10\,770 & 10\,783 \\
+Descartados por giro & 0 & 1 \\
+TF real / fallback & 10\,769/1 & 10\,782/1 \\
+Máximo gap odométrico & 946.9 ms & 590.1 ms \\
+Celdas ocupadas & 2\,058 & 2\,058 \\
+Espesor de pared (mediana/p95) & 0.10/0.28 m & 0.10/0.28 m \\
+Celdas distintas entre mapas & \multicolumn{2}{c}{1} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+La Tabla~\ref{tab:params_a} reúne los parámetros de diseño más relevantes de la Parte~A.
+
+\begin{table}[h]
+\centering
+\caption{Parámetros clave de la Parte A}
+\label{tab:params_a}
+\begin{tabular}{lll}
+\toprule
+\textbf{Módulo} & \textbf{Parámetro} & \textbf{Valor} \\
+\midrule
+Keyframe & distancia / ángulo & 0.15 m / 0.60 rad \\
+Odometría & $\boldsymbol{\sigma}$ (x,y,$\theta$) & 0.3, 0.3, 0.1 \\
+Avistaje & $\sigma_\phi(r),\sigma_r(r)$ & $0.10{+}0.05r$ / $0.024{+}0.032r^2$ \\
+Optimizador & método / kernel & LM / Cauchy $k{=}1$ \\
+Cierre lazo & paralaje / salto / $\chi^2$ & 0.20 m / 0.75 m / 5.99 \\
+ArUco & área mín / reproj. máx & 250 px / 4.0 px \\
+Grilla & resolución & 0.05 m/celda \\
+Grilla & $L_{\text{occ}}/L_{\text{free}}$ & $+0.85$ / $-0.40$ \\
+\bottomrule
+\end{tabular}
+\end{table}

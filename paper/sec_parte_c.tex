@@ -1,0 +1,83 @@
+\section{Parte C: Despliegue Real, Exploración Informativa y Percepción}
+\label{sec:parte_c}
+
+La Parte~C lleva el sistema al robot físico y le añade una \textbf{misión de exploración activa}: recorrer autónomamente el laberinto buscando conos rojos, discriminándolos de distractores de otros colores y aproximándose sin intentar atravesar paredes. La capa de misión (paquete \texttt{tp\_c\_mission}) se monta \emph{encima} de la navegación estable de la Parte~B sin reemplazarla: el \texttt{mission\_manager} nunca produce \texttt{/cmd\_vel}, sino que publica objetivos en \texttt{/mission\_goal} y deja que la máquina de estados de la Parte~B ejecute el movimiento (Fig.~\ref{fig:c_arch}).
+
+\begin{figure}[t]
+\centering
+\begin{tikzpicture}[node distance=5mm and 7mm]
+  \node[node2] (cone) {red\_cone\_detector};
+  \node[node2, right=of cone] (mm) {mission\_manager\\(exploración)};
+  \node[state, below=of mm] (fsm) {state\_machine\\(Parte B)};
+  \node[node2, left=of fsm] (mcl) {mcl\_localization};
+  \draw[tr] (cone) -- node[above,topic]{/red\_cone\_pose} (mm);
+  \draw[tr] (mm) -- node[right,topic]{/mission\_goal} (fsm);
+  \draw[tr] (fsm) to[bend left=35] node[right,topic]{/navigation\_result} (mm);
+  \draw[tr] (mcl) -- node[below,topic]{/mcl\_pose} (fsm);
+  \draw[tr] (mcl) to[bend right=20] node[left,topic]{pose+cov} (mm);
+\end{tikzpicture}
+\caption{Arquitectura de la Parte~C. La misión decide \emph{a dónde} ir y la FSM de la Parte~B decide \emph{cómo} moverse; la realimentación viaja por \texttt{/navigation\_result}.}
+\label{fig:c_arch}
+\end{figure}
+
+\subsection{Exploración informativa}
+El \texttt{mission\_manager} mantiene una creencia de cobertura (\texttt{CoverageBelief}) de qué celdas libres ya fueron observadas por la cámara. En cada ciclo genera poses candidatas alcanzables (barrido de la grilla con paso $0.50$~m, 8 orientaciones por celda) y, para cada una, estima por \emph{ray-casting} qué celdas vería la cámara (FOV $1.05$~rad, alcance $3.0$~m; la visibilidad se precalcula una vez por mapa). Selecciona la acción que maximiza una \textbf{función de utilidad}:
+\begin{equation}
+U = 0.55\,g_{\text{cob}} + 0.20\,g_{\text{loc}}\,s_{\text{cov}} - 0.20\,c_{\text{cam}} - 0.05\,(\rho+\text{rep}),
+\end{equation}
+donde $g_{\text{cob}}$ es la ganancia de cobertura (celdas nuevas normalizadas), $g_{\text{loc}}$ la fracción de landmarks de la Parte~A que quedarían visibles (mejora la localización), $s_{\text{cov}}$ un factor que pesa más la localización cuando la incertidumbre del MCL es alta, $c_{\text{cam}}$ el costo del camino A$^\star$ normalizado, $\rho$ el riesgo por cercanía a obstáculos y \emph{rep} una penalización a celdas ya visitadas. El costo del camino se refina con A$^\star$ sólo para los mejores candidatos por un \emph{ranking} barato previo. Si no hay acciones informativas o la cobertura supera el 95\%, la misión termina en \texttt{NOT\_FOUND}; existe además un \emph{fallback} de frontera que prioriza celdas libres no observadas adyacentes a lo ya visto.
+
+\subsection{Detección de conos rojos}
+El nodo \texttt{red\_cone\_detector} resuelve los dos desafíos que plantea la consigna: discriminar el rojo de distractores y no ``ver a través'' de las paredes.
+
+\textbf{Segmentación en HSV (dos bandas):} el rojo envuelve el origen del matiz, por lo que la máscara combina dos bandas ($H\leq 10$ \emph{o} $H\geq 170$ en escala OpenCV) con saturación $\geq 100$ y valor $\geq 70$. La máscara se limpia con apertura + cierre morfológico.
+
+\textbf{Validación geométrica:} sobre las componentes conexas se exige área $\geq 150$~px, altura $\geq 10$~px, un factor de llenado $\geq 0.20$ y \textbf{forma de cono} (base más ancha que la punta). Con \emph{depth} real se añade validación 3D que descarta distractores planos (como una superficie roja): se estima la altura real del objeto y se rechaza si difiere $>0.13$~m de los $\sim$0.30~m del cono, o si su base no está apoyada en el piso ($|z|>0.20$~m).
+
+\textbf{Confirmación temporal:} un rastreador exige $\geq 3$ detecciones en una ventana de 5 \emph{frames} con centros consistentes ($<25$~px de salto) antes de confirmar, filtrando destellos espurios.
+
+\textbf{Estimación de distancia (con degradación elegante):} se prefiere la mediana del \emph{depth} alineado sobre los píxeles del cono ($\sigma=0.05$~m); si no hay \emph{depth} válido, se usa el \emph{fallback} monocular $d = f_y\,h_{\text{cono}}/h_{\text{px}}$ ($\sigma=0.20$~m); en el robot real se usan además haces del LIDAR en la dirección del cono. La detección confirmada se publica como \texttt{/red\_cone\_pose} en el marco \texttt{map}, con covarianza acorde a la fuente.
+
+Crucialmente, la detección \textbf{nunca se convierte en un comando de velocidad}: reporta la coordenada al planificador, que genera una trayectoria válida que rodea los muros reales (si el cono se ve por una abertura, el objetivo se valida sobre la grilla). Sólo se acepta una pose de aproximación libre, visible y alcanzable por A$^\star$ (anillo de \emph{standoff} $0.55$~m alrededor del cono).
+
+\subsection{Adaptador ArUco$\rightarrow$MCL para el robot real}
+En el robot físico no hay sensor virtual: las detecciones ArUco reales las procesa \texttt{aruco\_mcl\_adapter}, que transforma cada marcador a \emph{range}/\emph{bearing} con su ID y compensa la latencia de la imagen. Un hallazgo de laboratorio fue que la imagen RGB podía llegar al \emph{callback} 2.6--2.9~s después de su estampa, mientras el LIDAR llegaba fresco; el adaptador re-expresa la observación de \texttt{base}$(t_{\text{obs}})$ a \texttt{base}$(t_{\text{ahora}})$ usando el movimiento relativo en \texttt{odom} antes de publicarla. El MCL asocia entonces la observación por ID directamente contra las posiciones optimizadas del \texttt{trajectory.json} de la Parte~A, sin \emph{data association} geométrica.
+
+\subsection{Máquina de estados de la misión}
+La Fig.~\ref{fig:fsm_c} muestra el diagrama de bloques de la máquina de estados de la misión (Parte~C). Desde \texttt{IDLE}, el servicio \texttt{/mission/start} --- que sólo procede si hay mapa, pose MCL fresca y visión lista --- pasa a \texttt{EXPLORING}. Una detección confirmada alcanzable dispara \texttt{APPROACHING}; al alcanzar el cono (\texttt{/navigation\_result = REACHED}) la misión termina en \texttt{FOUND}. Un plan fallido de aproximación vuelve a \texttt{EXPLORING}. Los estados terminales \texttt{NOT\_FOUND} (\emph{timeout} o cobertura agotada) y \texttt{FAILED} (gate de seguridad, ver abajo) cierran la misión y detienen la navegación.
+
+\begin{figure}[t]
+\centering
+\begin{tikzpicture}[node distance=7mm and 12mm]
+  \node[state] (idle) {IDLE};
+  \node[state, right=of idle] (exp) {EXPLORING};
+  \node[state, right=of exp] (app) {APPROACHING};
+  \node[term, below=8mm of app] (found) {FOUND};
+  \node[term, below=8mm of exp] (nf) {NOT\_FOUND};
+  \node[term, below=8mm of idle] (fail) {FAILED};
+  \draw[tr] (idle) -- node[above,align=center]{start\\(gates OK)} (exp);
+  \draw[tr] (exp) -- node[above]{cono visible} (app);
+  \draw[tr] (app) to[bend left=25] node[below]{plan falla} (exp);
+  \draw[tr] (app) -- node[right]{REACHED} (found);
+  \draw[tr] (exp) -- node[right,align=center]{timeout /\\cobertura} (nf);
+  \draw[tr] (exp) to[bend right=12] node[left,pos=0.3]{gate/visión} (fail);
+  \draw[tr] (idle) -- node[left]{start bloq.} (fail);
+\end{tikzpicture}
+\caption{Diagrama de bloques de la máquina de estados de la misión de la Parte~C. Los estados verdes son terminales. La cancelación (\texttt{/mission/cancel}) retorna a \texttt{IDLE} desde cualquier estado activo (no dibujada).}
+\label{fig:fsm_c}
+\end{figure}
+
+\subsection{Gates de seguridad}
+En el perfil real, la misión aborta a \texttt{FAILED} y publica velocidad cero si la pose del MCL queda vieja ($>1.0$~s), su covarianza supera los umbrales ($0.25$~m$^2$ en posición, $0.5$ en \emph{yaw}) o la visión/TF de cámara deja de estar fresca ($>3.0$~s). Estos \emph{gates} también bloquean el arranque de la misión. Es una salvaguarda deliberada para el hardware: ante duda sobre dónde está el robot, se detiene.
+
+\subsection{Validación y estado (a completar)}
+Siguiendo la metodología exigida por la consigna, validamos exhaustivamente contra RosBags antes del laboratorio. Los tests unitarios de percepción, exploración y contratos pasan sin ROS; el \emph{smoke} conjunto sobre el bag del laberinto (transporte, predicción del MCL y salud del monitor) aprueba 3 pruebas y la suite ROS 215 pruebas, sin publicar jamás sobre el \texttt{/cmd\_vel} físico. La Fig.~\ref{fig:c_explore} ilustra la cobertura explorada y los \emph{frontiers} candidatos en simulación.
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=0.85\columnwidth]{exploring.png}
+\caption{Exploración informativa en simulación: cobertura observada por la cámara (celdas) y candidatos \emph{frontier} evaluados por la función de utilidad.}
+\label{fig:c_explore}
+\end{figure}
+
+\textbf{Pendiente de hardware.} Al momento de esta redacción \emph{no se realizó todavía la prueba sobre el robot físico}. Quedan pendientes los \emph{gates} físicos, que se ejecutarán en la ventana de laboratorio con el robot detenido y la parada de emergencia accesible: (B1)~localización con movimiento deshabilitado; (B2)~un \emph{goal} corto a velocidad reducida y luego múltiples \emph{goals}; (B3)~detección de obstáculo con el robot detenido, re-planeo sin movimiento y evasión reducida con recuperación del MCL. El análisis cuantitativo de la brecha \emph{sim-to-real} y los resultados de la misión de conos sobre hardware se incorporarán tras esa sesión (§\ref{sec:conclusion}).

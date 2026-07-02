@@ -1,0 +1,156 @@
+\section{Parte B: Navegación Autónoma (Sistema 3)}
+\label{sec:parte_b}
+
+La Parte~B implementa la navegación autónoma sobre el mapa consolidado, siguiendo el \emph{Sistema~3} de la consigna (grilla de ocupación + landmarks de cámara). Como Gazebo no provee marcadores visuales nativos, diseñamos un \textbf{sensor virtual de landmarks} que emula el detector ArUco. Todo el código nuevo reside en el paquete \texttt{tp\_b\_navigation}, sin modificar la Parte~A.
+
+\subsection{Arquitectura de nodos y cadena de TF}
+El sistema se descompone en siete nodos con responsabilidades claras (Fig.~\ref{fig:nodos_b}). La decisión de diseño central es que \textbf{un único nodo, la máquina de estados, es el dueño exclusivo de \texttt{/cmd\_vel}}: fusiona la FSM con el controlador de seguimiento, el ángulo final y la evasión, porque coordinar el control entre procesos es mucho más frágil que tener un único productor de velocidad. El planificador y el monitor de obstáculos quedan como nodos puros, separados para claridad.
+
+\begin{figure}[t]
+\centering
+\begin{tikzpicture}[node distance=3mm and 4mm]
+  \node[node2] (map) {map\_loader};
+  \node[node2, right=8mm of map] (lmp) {landmark\_pub.};
+  \node[node2, below=of map] (sensor) {landmark\_sensor};
+  \node[node2, right=of sensor] (mcl) {mcl\_localization};
+  \node[node2, below=of mcl] (plan) {global\_planner};
+  \node[node2, left=of plan] (mon) {obstacle\_monitor};
+  \node[state, below=6mm of plan] (fsm) {state\_machine\\\textbf{/cmd\_vel}};
+  \draw[tr] (map) -- node[left,topic]{/map} (sensor);
+  \draw[tr] (lmp) -- node[right,topic]{/landmarks} (mcl);
+  \draw[tr] (sensor) -- node[above,topic]{obs} (mcl);
+  \draw[tr] (mcl) -- node[left,topic]{TF map$\to$odom} (plan);
+  \draw[tr] (plan) -- node[right,topic]{/plan} (fsm);
+  \draw[tr] (mon) -- node[left,topic]{/obstacle} (fsm);
+  \draw[tr] (fsm) to[bend left=30] node[right,topic]{/plan\_request} (plan);
+\end{tikzpicture}
+\caption{Mapa de nodos de la Parte~B. El MCL cierra la cadena de TF publicando \texttt{map$\to$odom}; la máquina de estados es el único productor de \texttt{/cmd\_vel}.}
+\label{fig:nodos_b}
+\end{figure}
+
+La cadena de transformadas es \texttt{map}\,$\to$\,\allowbreak\texttt{odom}\,$\to$\,\allowbreak\texttt{base\_footprint}\,$\to$\,\allowbreak\texttt{base\_scan}. Gazebo publica \texttt{odom}\,$\to$\,\texttt{base\_footprint}; el \textbf{MCL cierra la cadena} publicando la corrección \texttt{map}\,$\to$\,\texttt{odom} a 30~Hz. Todos los consumidores leen la pose del robot con \texttt{lookup\_transform(map, base\_footprint)}.
+
+\subsection{Localización: filtro de partículas (MCL)}
+El nodo \texttt{mcl\_localization} implementa \emph{Monte Carlo Localization} \cite{amcl} con mapa y landmarks conocidos y fijos (no hace SLAM). Usa $N=350$ partículas, inicializadas por la herramienta ``2D Pose Estimate'' de RViz (\texttt{/initialpose}).
+
+\textbf{Predicción:} por cada mensaje de \texttt{/calc\_odom} se aplica el modelo de movimiento por odometría (deltas $\delta_{\text{rot1}},\delta_{\text{trans}},\delta_{\text{rot2}}$ con ruido $\alpha_{1..4}$). La odometría de referencia de Gazebo se mantiene separada sólo para construir la TF \texttt{map$\to$odom}.
+
+\textbf{Corrección híbrida:} las partículas se pesan combinando dos modelos de medición:
+\begin{itemize}
+\item \emph{Láser--mapa}: se construye un \emph{likelihood field} desde las celdas ocupadas del mapa y se pondera según cuán cerca caen de las paredes los \emph{endpoints} muestreados del LIDAR (hasta 60 haces, $\sigma_{\text{hit}}=0.18$~m). Partículas fuera del mapa, en desconocido o dentro de ocupado reciben una penalización fuerte.
+\item \emph{Landmarks}: acepta tanto el contrato por índice (\texttt{/observed\_landmarks}) como el identificado por ID ArUco (\texttt{/observed\_landmark\_ids}); en el bag/real la asociación es directa contra los IDs del \texttt{trajectory.json} de la Parte~A.
+\end{itemize}
+Las correcciones se disparan sólo tras movimiento suficiente ($\texttt{update\_min\_d}/\texttt{update\_min\_a}$) para evitar la degeneración estática de la nube.
+
+\textbf{Remuestreo y diversidad:} se usa remuestreo de baja varianza cuando $n_{\text{eff}}<N/2$, seguido de \emph{roughening} (jitter $0.03$~m en posición, $0.02$~rad en ángulo) para evitar el empobrecimiento de partículas. Finalmente, la TF \texttt{map$\to$odom} se publica con la estampa adelantada $0.1$~s (\texttt{transform\_tolerance}, truco de AMCL) para que siga siendo válida ante lecturas con estampa más nueva, evitando el parpadeo por ``extrapolation into the future''.
+
+\subsection{Sensor virtual de landmarks con oclusión}
+El nodo \texttt{landmark\_sensor} emula el detector ArUco ausente en Gazebo. Por cada landmark conocido: (1)~lo proyecta al marco del robot y calcula \emph{range}+\emph{bearing}; (2)~descarta los que caen fuera del FOV de $1.05$~rad o del rango; (3)~calcula la \textbf{oclusión por línea de visión} comparando el \emph{range} esperado contra el rayo central del LIDAR (si un obstáculo aparece $>0.08$~m antes, el landmark está ocluido y no se publica); (4)~agrega ruido gaussiano ($\sigma_r=\sigma_\phi=0.05$).
+
+Dos decisiones fueron críticas para la convergencia:
+\begin{itemize}
+\item \textbf{Desacople de la estimación (\texttt{truth\_frame}):} una cámara real ve los landmarks según la pose \emph{verdadera} del robot, no según la estimación del filtro. Proyectar con la TF del MCL realimentaría el filtro consigo mismo y lo haría diverger. Por eso el sensor proyecta con \texttt{odom$\to$base} (en Gazebo la odometría es cuasi \emph{ground-truth}).
+\item \textbf{Estampa de la TF, no del scan:} la salida se estampa con el tiempo de la TF usada, no con el del \texttt{/scan} (que Gazebo adelanta 20--60~ms), garantizando una cadena \texttt{map$\to$odom$\to$base} válida en ese instante.
+\end{itemize}
+
+\textbf{Densidad de landmarks:} la consigna pide una densidad ``coherente con el ArUco real''. Escalamos de 14 a 36 y finalmente a \textbf{60 landmarks}, distribuidos por \emph{farthest-point sampling} sobre superficies de pared (un landmark en espacio libre nunca devolvería eco del LIDAR y jamás sería ``visible''). Con pocos landmarks el posterior se volvía multimodal por las simetrías de la casa (§\ref{sub:tuning}).
+
+\subsection{Planificación global: A$^\star$}
+El \texttt{global\_planner} ejecuta A$^\star$ 8-conexo \cite{astar} sobre la grilla, con: \textbf{inflado} de obstáculos por el radio del robot ($0.18$~m, distancia de Chebyshev por BFS multi-fuente); \textbf{penalización de cercanía} (\emph{clearance}) que encarece pasar pegado a las paredes, de modo que el robot prefiere el centro de los pasillos; tratamiento de las celdas desconocidas como obstáculo (\texttt{allow\_unknown=False}, por seguridad); y un \textbf{atajo por línea de visión} (Bresenham) que simplifica la ruta a pocos \emph{waypoints}, forzando el último exactamente al \texttt{goal\_pose}. Es un nodo puro: planifica al recibir \texttt{/plan\_request} y publica \texttt{/plan}.
+
+\subsection{Seguimiento, ángulo final y obstáculos}
+El seguimiento usa \textbf{pure-pursuit} \cite{purepursuit} con un punto ``zanahoria'' a \texttt{lookahead}$=0.30$~m: el rumbo se corrige con ganancia $k_w=1.6$ y la velocidad lineal se reduce con el error angular, $v=v_{\max}\max(0,1-|e|/\text{slow\_angle})$, de modo que el robot gira primero y avanza suave ($v_{\max}=0.18$~m/s, $w_{\max}=1.2$~rad/s). Alcanzada la posición (\texttt{goal\_xy\_tol}$=0.12$~m), un estado dedicado gira en el lugar hasta el \textbf{ángulo final} (\texttt{goal\_yaw\_tol}$=0.08$~rad).
+
+Para \textbf{obstáculos no mapeados}, el \texttt{obstacle\_monitor} distingue paredes conocidas de obstáculos nuevos: por cada eco del LIDAR en un cono frontal ($0.6$~rad) y cercano ($<0.45$~m), proyecta el punto a \texttt{map} y consulta la celda; si el mapa la marca libre pero el LIDAR ve algo, es un obstáculo nuevo. Con $\geq 3$ puntos nuevos publica \texttt{/obstacle\_detected}, y conserva los puntos en \texttt{/dynamic\_obstacles} (con inflación compacta de $0.08$~m) para que el siguiente A$^\star$ los rodee sin clausurar todo el pasillo.
+
+\subsection{Máquina de estados}
+La Fig.~\ref{fig:fsm_b} muestra el diagrama de bloques de la máquina de estados de la Parte~B, que gobierna el ciclo completo con ocho estados. El flujo nominal es \texttt{IDLE}\,$\to$\,\allowbreak\texttt{LOCALIZING}\,$\to$\,\allowbreak\texttt{WAITING\_GOAL}\,$\to$\,\allowbreak\texttt{PLANNING}\,$\to$\,\allowbreak\texttt{FOLLOWING}\,$\to$\,\allowbreak\texttt{ALIGNING\_ANGLE}\,$\to$\,\allowbreak\texttt{GOAL\_REACHED}. Las ramas cubren la evasión (\texttt{AVOIDING}), el re-planeo ante un nuevo objetivo en cualquier estado activo (requisito~1.8) y el fallo/\emph{timeout} de planificación. Un \texttt{/initialpose} reinicia siempre a \texttt{LOCALIZING}.
+
+\begin{figure}[t]
+\centering
+\begin{tikzpicture}[node distance=6mm and 9mm]
+  \node[state] (idle) {IDLE};
+  \node[state, below=of idle] (loc) {LOCALIZING};
+  \node[state, below=of loc] (wait) {WAITING\_GOAL};
+  \node[state, right=14mm of wait] (plan) {PLANNING};
+  \node[state, above=of plan] (follow) {FOLLOWING};
+  \node[state, right=10mm of follow] (avoid) {AVOIDING};
+  \node[state, above=of follow] (align) {ALIGNING\_ANGLE};
+  \node[term, above=of align] (reached) {GOAL\_REACHED};
+  \draw[tr] (idle) -- node[left]{initialpose} (loc);
+  \draw[tr] (loc) -- node[left]{TF estable 1.5s} (wait);
+  \draw[tr] (wait) -- node[below]{goal\_pose} (plan);
+  \draw[tr] (plan) -- node[right]{plan OK} (follow);
+  \draw[tr] (plan.south) to[bend right=20] node[below,align=center]{plan falla\\/timeout} (wait.east);
+  \draw[tr] (follow) -- node[above]{obstáculo} (avoid);
+  \draw[tr] (avoid) to[bend left=25] node[right]{despejado} (plan);
+  \draw[tr] (follow) -- node[right]{llegó (xy)} (align);
+  \draw[tr] (align) -- node[right]{yaw OK} (reached);
+  \draw[tr] (reached.west) to[bend right=55] node[left]{listo} (wait.north);
+  \draw[tr] (follow.west) to[bend right=12] node[left,pos=0.4]{goal nuevo} (plan.north west);
+\end{tikzpicture}
+\caption{Diagrama de bloques de la máquina de estados de la Parte~B. Cada arco indica el evento o condición que dispara la transición. Un \texttt{/initialpose} (no dibujado desde todos los orígenes) reinicia a \texttt{LOCALIZING}, y un \texttt{goal\_pose} nuevo re-planifica desde cualquier estado activo.}
+\label{fig:fsm_b}
+\end{figure}
+
+\subsection{Resultados y bitácora de \emph{tuning}}
+\label{sub:tuning}
+
+\textbf{Ciclo completo en \texttt{custom\_casa}.} Con localización perfecta (TF identidad, para aislar la navegación), el robot fue a un \emph{goal} a $180^\circ$ y llegó con error $\sim$10~cm/$3^\circ$, rodeando correctamente la sala central. Con el \textbf{MCL real}, cruzó toda la casa ($\sim$5~m) y llegó con error $\sim$6~cm, con el MCL estimando a $\sim$1.5~cm de la pose real en el \emph{goal} (Fig.~\ref{fig:nav_b}).
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=0.85\columnwidth]{02_navegacion_localizacion_perfecta.png}
+\caption{Navegación en \texttt{custom\_casa}: ruta A$^\star$ (verde) que rodea la sala central, trayectoria seguida y \emph{goal} alcanzado con ángulo final.}
+\label{fig:nav_b}
+\end{figure}
+
+\textbf{Convergencia del MCL.} El MCL inicialmente divergía. Tres correcciones, cada una verificada con datos, lo estabilizaron (Tabla~\ref{tab:tuning_mcl}): (1)~desacoplar el sensor de la estimación; (2)~elevar la densidad de 14 a 36--60 landmarks para eliminar la multimodalidad; (3)~\emph{roughening} + 350 partículas para recuperarse de discrepancias transitorias en lugar de diverger.
+
+\begin{table}[h]
+\centering
+\caption{Tuning del MCL: antes vs.\ después}
+\label{tab:tuning_mcl}
+\begin{tabular}{lccc}
+\toprule
+\textbf{Config.} & \textbf{Err. medio} & \textbf{Err. máx} & \textbf{Comportamiento} \\
+\midrule
+Antes (14 lm, acoplado) & 0.65 m & 2.9 m & diverge \\
+Después (36--60 lm, rough.) & \textbf{0.02--0.18 m} & recupera & trackea pegado \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\textbf{Obstáculos no mapeados en \texttt{custom\_casa\_obs}.} Con un \emph{goal} cuya ruta cruza una valija no mapeada, el monitor la detectó correctamente, la FSM entró en \texttt{AVOIDING} (8 maniobras), el robot \textbf{esquivó sin chocar} y el MCL se mantuvo preciso durante las rotaciones (error medio $0.16$~m, máx $0.90$~m sobre 799 muestras). Con \emph{goals} que no cruzan obstáculos no hubo falsos positivos (Fig.~\ref{fig:evasion_b}).
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=0.85\columnwidth]{04_evasion_obstaculos.png}
+\caption{Evasión en \texttt{custom\_casa\_obs}: el robot detecta la valija no mapeada, la esquiva (trayectoria roja) sin colisión y el MCL (naranja) se mantiene pegado a la pose real.}
+\label{fig:evasion_b}
+\end{figure}
+
+\textbf{Limitación conocida.} Cuando un obstáculo se sienta \emph{justo} sobre la única ruta buena (p.\,ej.\ un \emph{cluster} tapando la entrada al cuarto del \emph{goal}), la navegación se vuelve lenta y sinuosa: el planificador razona sobre el mapa estático y re-planifica la misma ruta bloqueada, avanzando sólo por los empujones reactivos de \texttt{AVOIDING}. No choca ni se rompe, pero es ineficiente. La mejora natural es un \emph{costmap local} que sume los obstáculos detectados al mapa estático para que A$^\star$ los rodee. La Tabla~\ref{tab:consigna_b} resume el cumplimiento de la consigna.
+
+\begin{table}[h]
+\centering
+\caption{Cumplimiento de la consigna de Parte B}
+\label{tab:consigna_b}
+\begin{tabular}{ll}
+\toprule
+\textbf{Requisito} & \textbf{Estado} \\
+\midrule
+1.1 Sistema 3 (landmarks de cámara) & \checkmark\ 60 lm + oclusión \\
+1.2 Localización inicial (\texttt{initialpose}) & \checkmark \\
+1.4 Localización continua (filtro prob.) & \checkmark\ MCL 0.02--0.18 m \\
+1.5 Planificación (A$^\star$/inflado/seguro) & \checkmark \\
+1.6 Seguimiento suave & \checkmark\ pure-pursuit \\
+1.7 Ángulo final & \checkmark \\
+1.8 Re-planeo (goal nuevo) & \checkmark \\
+1.9 Obstáculos no mapeados & $\triangle$ esquiva; ineficiente si tapa ruta \\
+1.11 Máquina de estados & \checkmark\ FSM completa \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\textbf{Re-mapeo del entorno simulado.} Como pide el Sistema~3, no reutilizamos el mapa del RosBag (mundo distinto), sino que repetimos el mapeo en Gazebo con el nodo \texttt{sim\_mapper}, que porta el núcleo de la grilla de ocupación de la Parte~A (mismas constantes de log-odds y export) pero toma la pose de cada barrido de la TF en vivo. El mapa generado por teleoperación ($220\times220$ a $0.05$~m) cubre el 100\% de las paredes con alineación casi perfecta respecto del mapa de referencia.

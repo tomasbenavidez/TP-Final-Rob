@@ -1,0 +1,138 @@
+\documentclass[conference]{IEEEtran}
+\IEEEoverridecommandlockouts
+
+\usepackage{cite}
+\usepackage{amsmath,amssymb,amsfonts}
+\usepackage{graphicx}
+\usepackage{textcomp}
+\usepackage{xcolor}
+\usepackage[utf8]{inputenc}
+\usepackage[spanish]{babel}
+\usepackage{hyperref}
+\usepackage{booktabs}
+\usepackage{tikz}
+\usetikzlibrary{arrows.meta,positioning,shapes.geometric,calc,fit,backgrounds}
+
+\graphicspath{{img/}}
+
+\def\BibTeX{{\rm B\kern-.05em{\sc i\kern-.025em b}\kern-.08em
+    T\kern-.1667em\lower.7ex\hbox{E}\kern-.125emX}}
+
+% --- estilos de diagramas de estados / bloques ---
+\tikzset{
+  state/.style={rectangle, rounded corners=3pt, draw=black!70, thick,
+    fill=blue!6, align=center, minimum height=8mm, minimum width=15mm,
+    font=\scriptsize\sffamily, inner sep=3pt},
+  term/.style={rectangle, rounded corners=3pt, draw=black!70, thick,
+    fill=green!10, align=center, minimum height=8mm, font=\scriptsize\sffamily, inner sep=3pt},
+  node2/.style={rectangle, draw=black!60, thick, fill=orange!8, align=center,
+    font=\scriptsize\sffamily, minimum height=7mm, inner sep=3pt},
+  topic/.style={font=\tiny\ttfamily, text=black!55},
+  tr/.style={-{Stealth[length=2mm]}, draw=black!70, font=\tiny\sffamily},
+}
+
+\begin{document}
+
+\title{Localización y Mapeo Simultáneos con Landmarks Visuales, Navegación Autónoma y Exploración Informativa en un TurtleBot4:\\ Memoria Técnica del Trabajo Práctico Final}
+
+\author{\IEEEauthorblockN{Tomás Benavidez Esposito}
+\IEEEauthorblockA{\textit{Ingeniería en Inteligencia Artificial} \\
+\textit{Universidad de San Andrés}\\
+Buenos Aires, Argentina \\
+tbenavidez@udesa.edu.ar}
+\and
+\IEEEauthorblockN{Naomi Couriel}
+\IEEEauthorblockA{\textit{Ingeniería en Inteligencia Artificial} \\
+\textit{Universidad de San Andrés}\\
+Buenos Aires, Argentina \\
+ncouriel@udesa.edu.ar}
+}
+
+\maketitle
+
+\begin{abstract}
+Presentamos la memoria técnica de un sistema robótico autónomo de localización y mapeo simultáneos (SLAM), navegación y exploración activa, desarrollado sobre la plataforma TurtleBot4 y ROS~2 Humble. El trabajo se estructura en tres etapas acopladas. En la \textbf{Parte~A} implementamos un \emph{Graph SLAM} sobre datos reales pregrabados (RosBag), fusionando el modelo de odometría por deltas con avistajes de marcadores \emph{ArUco} detectados por la cámara OAK-D; una primera pasada optimiza el grafo de poses con cierre de lazo y una segunda pasada proyecta el LIDAR sobre la trayectoria corregida para obtener una grilla de ocupación métrica. En la \textbf{Parte~B} desarrollamos la navegación autónoma (Sistema~3: grilla + landmarks de cámara) sobre Gazebo, integrando un filtro de partículas (MCL) que fusiona un modelo de haz láser con observaciones de un sensor virtual de landmarks con oclusión, un planificador global A$^\star$ con inflado y márgenes de seguridad, un seguidor \emph{pure-pursuit} y una máquina de estados que gobierna el ciclo completo, incluyendo detección y evasión de obstáculos no mapeados. En la \textbf{Parte~C} extendemos el sistema con una capa de misión de exploración informativa guiada por una función de utilidad y un módulo de percepción que detecta conos rojos por segmentación en HSV con validación geométrica y temporal, reproyectando la detección al planificador para respetar los muros reales. Reportamos los resultados cuantitativos obtenidos en simulación y sobre los RosBags del TurtleBot4 --- error de seguimiento del MCL de $0.02$--$0.18$~m y evasión sin colisión --- y documentamos las decisiones de diseño que hicieron converger cada subsistema. La validación sobre el robot físico (Parte~C) queda pendiente de la ventana de laboratorio y se detalla como trabajo a completar.
+\end{abstract}
+
+\begin{IEEEkeywords}
+SLAM, Graph SLAM, ArUco, Monte Carlo Localization, filtro de partículas, navegación autónoma, A$^\star$, máquina de estados, exploración informativa, ROS~2, TurtleBot4.
+\end{IEEEkeywords}
+
+\section{Introducción}
+
+La localización y el mapeo simultáneos (SLAM) constituyen uno de los problemas fundamentales de la robótica móvil: un robot que se desplaza por un entorno desconocido debe, al mismo tiempo, construir un mapa del entorno y estimar su propia posición dentro de él, empleando únicamente sensores inexactos y un modelo de movimiento afectado por ruido. Este trabajo práctico final integra los principales enfoques probabilísticos estudiados a lo largo de la materia \emph{Principios de la Robótica Autónoma} en un sistema completo que abarca desde la estimación de estado hasta la actuación autónoma.
+
+El sistema se desarrolla en tres etapas encadenadas, en las que cada una consume el producto de la anterior:
+
+\begin{itemize}
+    \item \textbf{Parte~A --- SLAM.} A partir de datos reales pre\-gra\-ba\-dos del TurtleBot4 (RosBag con LIDAR, cámara y odo\-me\-tría), el robot recorre un labe\-rinto y construye una repre\-sen\-ta\-ción del entorno mientras estima su tra\-yec\-to\-ria. Elegimos la \emph{Opción~3} de la consigna: extracción de características mediante marcadores \emph{ArUco} y \emph{Graph SLAM} obligatorio con cierre de lazo. El entregable es una grilla de ocupación métrica más el mapa geométrico de landmarks visuales indexados por su ID.
+    \item \textbf{Parte~B --- Navegación autónoma.} Sobre el mapa consolidado, el robot se localiza de forma continua con un filtro probabilístico y navega de manera segura entre puntos arbitrarios seleccionados por el usuario, planificando rutas libres de colisión, siguiéndolas suavemente, alcanzando el ángulo final, re-planificando ante nuevos objetivos y evadiendo obstáculos no mapeados. Todo el comportamiento se gobierna mediante una máquina de estados.
+    \item \textbf{Parte~C --- Despliegue real y exploración.} El sistema se lleva a la plataforma física y se le añade una misión de exploración activa: recorrer autónomamente el laberinto buscando conos rojos, discriminándolos de distractores de otros colores y aproximándose a ellos sin intentar atravesar paredes.
+\end{itemize}
+
+Nuestra contribución principal no es un algoritmo nuevo, sino la \emph{integración rigurosa} de estas técnicas en un sistema funcional y modular, y la documentación honesta de las decisiones de diseño --- y de los errores corregidos --- que fueron necesarios para que cada subsistema convergiera sobre datos reales y ruidosos. Como pide la consigna, incluimos los diagramas de bloques de las máquinas de estados empleadas en las Partes~B y~C.
+
+La Fig.~\ref{fig:pipeline} resume el flujo de datos entre las tres partes. Advertencia metodológica: al momento de redacción no se realizó todavía la prueba sobre el robot físico; los resultados de la Parte~C sobre hardware real se marcan explícitamente como \emph{a completar} y se dejan preparados los procedimientos de validación (RosBags y gates de seguridad).
+
+\begin{figure}[t]
+\centering
+\begin{tikzpicture}[node distance=3.5mm and 6mm]
+  \node[node2] (A) {\textbf{Parte A}\\Graph SLAM\\(RosBag TB4)};
+  \node[node2, right=of A] (B) {\textbf{Parte B}\\Navegación\\(Gazebo)};
+  \node[node2, right=of B] (C) {\textbf{Parte C}\\Misión + visión\\(robot real)};
+  \draw[tr] (A) -- node[above,topic]{map.pgm} node[below,topic]{trajectory.json} (B);
+  \draw[tr] (B) -- node[above,topic]{MCL + A*} node[below,topic]{FSM} (C);
+\end{tikzpicture}
+\caption{Encadenamiento de las tres partes. La Parte~A produce la grilla de ocupación y el mapa de landmarks ArUco; la Parte~B aporta la pila de localización, planificación y control; la Parte~C reutiliza ambas y añade la capa de misión y percepción sobre el robot físico.}
+\label{fig:pipeline}
+\end{figure}
+
+\section{Marco Teórico y Plataforma}
+
+\subsection{Enfoque probabilístico}
+Adoptamos el marco probabilístico clásico de la robótica \cite{thrun}. El estado del robot en el plano es la pose $\mathbf{x}_t=(x,y,\theta)^\top$. La creencia sobre el estado se propaga con el modelo de movimiento por odometría $p(\mathbf{x}_t\mid\mathbf{x}_{t-1},\mathbf{u}_t)$ y se corrige con el modelo de medición $p(\mathbf{z}_t\mid\mathbf{x}_t,\mathbf{m})$ dado el mapa $\mathbf{m}$. Según la etapa, la inferencia sobre esta creencia se resuelve por optimización de un grafo de factores (Parte~A) o mediante un filtro de partículas (Parte~B/C).
+
+\subsection{Modelo de movimiento por odometría}
+En las tres partes, la predicción se basa en el modelo de \emph{deltas} de odometría de Thrun \cite{thrun}: entre dos lecturas consecutivas de odometría se descompone el desplazamiento relativo en una rotación inicial $\delta_{\text{rot1}}$, una traslación $\delta_{\text{trans}}$ y una rotación final $\delta_{\text{rot2}}$,
+\begin{align}
+\delta_{\text{trans}} &= \sqrt{(\bar{x}'-\bar{x})^2+(\bar{y}'-\bar{y})^2},\\
+\delta_{\text{rot1}} &= \operatorname{atan2}(\bar{y}'-\bar{y},\,\bar{x}'-\bar{x})-\bar{\theta},\\
+\delta_{\text{rot2}} &= \bar{\theta}'-\bar{\theta}-\delta_{\text{rot1}},
+\end{align}
+computados siempre como diferencia respecto de la odometría del instante anterior. El ruido se modela como gaussiano con parámetros $\alpha_1..\alpha_4$ sobre cada componente.
+
+\subsection{Plataforma y entorno de trabajo}
+El robot es un TurtleBot4 (base iRobot Create~3, LIDAR 2D RPLIDAR y cámara estéreo OAK-D). Para la Parte~A trabajamos con RosBags reales grabados con el TurtleBot4 (namespace \texttt{tb4\_1}/\texttt{tb4\_0}); para la Parte~B usamos el simulador Gazebo con el mundo \texttt{custom\_casa}; y la Parte~C está preparada para el robot físico y validada previamente contra RosBags. Todo el software se implementó en ROS~2 Humble, organizado en paquetes \texttt{ament\_python} independientes por parte (\texttt{tp\_a\_slam\_aruco}, \texttt{tp\_b\_navigation}, \texttt{tp\_c\_mission}) más paquetes compartidos de interfaces y utilidades.
+
+%=================================================================
+% PARTE A  (a completar con detalle de agente)
+%=================================================================
+\input{sec_parte_a}
+
+%=================================================================
+% PARTE B
+%=================================================================
+\input{sec_parte_b}
+
+%=================================================================
+% PARTE C
+%=================================================================
+\input{sec_parte_c}
+
+%=================================================================
+% DISCUSION Y CONCLUSION
+%=================================================================
+\input{sec_conclusion}
+
+\begin{thebibliography}{00}
+\bibitem{thrun} S. Thrun, W. Burgard y D. Fox, \emph{Probabilistic Robotics}. Cambridge, MA: MIT Press, 2005.
+\bibitem{grisetti} G. Grisetti, R. Kümmerle, C. Stachniss y W. Burgard, ``A Tutorial on Graph-Based SLAM,'' \emph{IEEE Intelligent Transportation Systems Magazine}, vol.~2, no.~4, pp.~31--43, 2010.
+\bibitem{aruco} S. Garrido-Jurado \emph{et al.}, ``Automatic generation and detection of highly reliable fiducial markers under occlusion,'' \emph{Pattern Recognition}, vol.~47, no.~6, pp.~2280--2292, 2014.
+\bibitem{opencv} G. Bradski, ``The OpenCV Library,'' \emph{Dr. Dobb's Journal of Software Tools}, 2000.
+\bibitem{amcl} D. Fox, ``Adapting the Sample Size in Particle Filters Through KLD-Sampling,'' \emph{Int. Journal of Robotics Research}, vol.~22, no.~12, pp.~985--1003, 2003.
+\bibitem{astar} P. E. Hart, N. J. Nilsson y B. Raphael, ``A Formal Basis for the Heuristic Determination of Minimum Cost Paths,'' \emph{IEEE Trans. Systems Science and Cybernetics}, vol.~4, no.~2, pp.~100--107, 1968.
+\bibitem{purepursuit} R. C. Coulter, ``Implementation of the Pure Pursuit Path Tracking Algorithm,'' Carnegie Mellon Univ., Robotics Institute, Tech. Rep. CMU-RI-TR-92-01, 1992.
+\bibitem{ros2} S. Macenski \emph{et al.}, ``Robot Operating System 2: Design, architecture, and uses in the wild,'' \emph{Science Robotics}, vol.~7, no.~66, 2022.
+\end{thebibliography}
+
+\end{document}
