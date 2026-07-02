@@ -281,6 +281,33 @@ def test_aruco_diagnostics_writer_creates_parent_directory(tmp_path):
     assert diagnostics_path.exists()
 
 
+def test_aruco_image_timing_writer_records_frame_delay(tmp_path):
+    from tp_a_slam_aruco.aruco_detector_node import ArucoDetectorNode
+
+    timing_path = tmp_path / 'logs_runs' / 'aruco_image_timing.csv'
+    node = ArucoDetectorNode.__new__(ArucoDetectorNode)
+    node.image_timing_file = str(timing_path)
+    node._image_timing_writer = None
+    node._image_timing_handle = None
+    node.get_logger = lambda: _DummyLogger()
+
+    node._write_image_timing(
+        image_stamp=10.0,
+        callback_stamp=12.5,
+        processing_ms=30.0,
+        detected_count=3,
+        accepted_count=2,
+        published_count=2,
+        frame_id='camera',
+    )
+    node.close_diagnostics()
+
+    text = timing_path.read_text()
+    assert 'image_stamp,callback_stamp,callback_delay_sec' in text
+    assert '10.000000000,12.500000000,2.500000000' in text
+    assert ',30.000,3,2,2,camera' in text
+
+
 def test_geometry_debug_writer_creates_parent_directory(tmp_path):
     from tp_a_slam_aruco.graph_slam_node import GraphSlamNode
 

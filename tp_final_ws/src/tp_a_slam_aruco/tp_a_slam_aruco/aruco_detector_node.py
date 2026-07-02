@@ -26,6 +26,7 @@ en el tablero; este archivo arranca con la detección base sólida (F2-A).
 import numpy as np
 import csv
 import os
+import time
 
 import rclpy
 from rclpy.executors import ExternalShutdownException
@@ -67,6 +68,7 @@ class ArucoDetectorNode(Node):
         self.declare_parameter('max_reprojection_error_px', 4.0)
         self.declare_parameter('allowed_marker_ids', '')
         self.declare_parameter('diagnostics_file', '/tmp/aruco_detections.csv')
+        self.declare_parameter('image_timing_file', '/tmp/aruco_image_timing.csv')
 
         image_topic = self.get_parameter('image_topic').value
         calib_file = self.get_parameter('calibration_file').value
@@ -88,8 +90,11 @@ class ArucoDetectorNode(Node):
             self.get_parameter('allowed_marker_ids').value
         )
         self.diagnostics_file = self.get_parameter('diagnostics_file').value
+        self.image_timing_file = self.get_parameter('image_timing_file').value
         self._diag_handle = None
         self._diag_writer = None
+        self._image_timing_handle = None
+        self._image_timing_writer = None
         self._detection_frame_count = 0
 
         # Calibración de la cámara. Por default se prefiere camera_info para
@@ -116,7 +121,7 @@ class ArucoDetectorNode(Node):
         # Tópico camera_info: se infiere del tópico de imagen (convención ROS).
         # Si la imagen es /foo/image_raw, el camera_info es /foo/camera_info.
         info_topic = image_topic.replace('image_raw', 'camera_info')
-        from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy, qos_profile_sensor_data
+        from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
         _best_effort = QoSProfile(
             reliability=ReliabilityPolicy.BEST_EFFORT,
             history=HistoryPolicy.KEEP_LAST,
@@ -154,11 +159,11 @@ class ArucoDetectorNode(Node):
         # Publicamos detecciones crudas en frame cámara/base. Los landmarks
         # estimados en mapa los publica graph_slam_node en /landmarks.
         self.sub = self.create_subscription(
-            Image, image_topic, self.image_callback, qos_profile_sensor_data
+            Image, image_topic, self.image_callback, _best_effort
         )
         self.marker_pub = self.create_publisher(MarkerArray, detections_topic, 10)
         self.debug_image_pub = (
-            self.create_publisher(Image, debug_image_topic, qos_profile_sensor_data)
+            self.create_publisher(Image, debug_image_topic, _best_effort)
             if self.publish_debug_image else None
         )
 
@@ -213,20 +218,44 @@ class ArucoDetectorNode(Node):
 
     def image_callback(self, msg: Image):
         """Procesa cada frame de la cámara."""
+        callback_stamp = self._now_sec()
+        image_stamp = self._stamp_to_sec(msg.header.stamp)
+        processing_start = time.monotonic()
+        detected_count = 0
+        accepted_count = 0
         # Convertimos el mensaje ROS a una imagen OpenCV (BGR).
         try:
             frame = self.bridge.imgmsg_to_cv2(msg, desired_encoding='bgr8')
         except Exception as e:
             self.get_logger().error(f'Error convirtiendo imagen: {e}')
+            self._write_image_timing(
+                image_stamp=image_stamp,
+                callback_stamp=callback_stamp,
+                processing_ms=(time.monotonic() - processing_start) * 1000.0,
+                detected_count=0,
+                accepted_count=0,
+                published_count=0,
+                frame_id=msg.header.frame_id,
+            )
             return
 
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
 
         # Detección 2D: devuelve las esquinas de cada marcador y sus IDs.
         corners, ids, _rejected = self._detect_markers(gray)
+        detected_count = 0 if ids is None else int(len(ids.flatten()))
 
         if ids is None or len(ids) == 0:
             self._publish_debug_image(frame, corners, ids, msg.header)
+            self._write_image_timing(
+                image_stamp=image_stamp,
+                callback_stamp=callback_stamp,
+                processing_ms=(time.monotonic() - processing_start) * 1000.0,
+                detected_count=0,
+                accepted_count=0,
+                published_count=0,
+                frame_id=msg.header.frame_id,
+            )
             return  # ningún marcador en este frame
 
         # Estimación de pose 3D de cada marcador (requiere calibración).
@@ -238,6 +267,7 @@ class ArucoDetectorNode(Node):
                 self.camera_matrix, self.dist_coeffs
             )
             accepted = self._filter_detections(detections, msg.header)
+            accepted_count = len(accepted)
             self._log_detection_summary(accepted)
         else:
             ids_list = [int(i) for i in ids.flatten()]
@@ -250,6 +280,15 @@ class ArucoDetectorNode(Node):
         # Publicamos los markers para RViz.
         self._publish_markers(accepted, msg.header)
         self._publish_debug_image(frame, corners, ids, msg.header)
+        self._write_image_timing(
+            image_stamp=image_stamp,
+            callback_stamp=callback_stamp,
+            processing_ms=(time.monotonic() - processing_start) * 1000.0,
+            detected_count=detected_count,
+            accepted_count=accepted_count,
+            published_count=len(accepted),
+            frame_id=msg.header.frame_id,
+        )
 
     def _filter_detections(self, detections, header):
         accepted = []
@@ -346,11 +385,77 @@ class ArucoDetectorNode(Node):
                 'missing_calibration',
             )
 
+    def _ensure_image_timing_writer(self):
+        if not self.image_timing_file:
+            return None
+        if self._image_timing_writer is None:
+            parent_dir = os.path.dirname(self.image_timing_file)
+            if parent_dir:
+                os.makedirs(parent_dir, exist_ok=True)
+            self._image_timing_handle = open(
+                self.image_timing_file, 'w', newline='')
+            self._image_timing_writer = csv.DictWriter(
+                self._image_timing_handle,
+                fieldnames=[
+                    'image_stamp',
+                    'callback_stamp',
+                    'callback_delay_sec',
+                    'processing_ms',
+                    'detected_count',
+                    'accepted_count',
+                    'published_count',
+                    'frame_id',
+                ],
+            )
+            self._image_timing_writer.writeheader()
+            self._image_timing_handle.flush()
+            self.get_logger().info(
+                f'Timing ArUco escribiendo en {self.image_timing_file}')
+        return self._image_timing_writer
+
+    def _write_image_timing(
+        self,
+        *,
+        image_stamp,
+        callback_stamp,
+        processing_ms,
+        detected_count,
+        accepted_count,
+        published_count,
+        frame_id,
+    ):
+        writer = self._ensure_image_timing_writer()
+        if writer is None:
+            return
+        callback_delay = callback_stamp - image_stamp
+        writer.writerow({
+            'image_stamp': f'{image_stamp:.9f}',
+            'callback_stamp': f'{callback_stamp:.9f}',
+            'callback_delay_sec': f'{callback_delay:.9f}',
+            'processing_ms': f'{float(processing_ms):.3f}',
+            'detected_count': int(detected_count),
+            'accepted_count': int(accepted_count),
+            'published_count': int(published_count),
+            'frame_id': frame_id,
+        })
+        self._image_timing_handle.flush()
+
     def close_diagnostics(self):
-        if self._diag_handle is not None:
+        if getattr(self, '_diag_handle', None) is not None:
             self._diag_handle.close()
             self._diag_handle = None
             self._diag_writer = None
+        if getattr(self, '_image_timing_handle', None) is not None:
+            self._image_timing_handle.close()
+            self._image_timing_handle = None
+            self._image_timing_writer = None
+
+    def _now_sec(self):
+        return self.get_clock().now().nanoseconds * 1e-9
+
+    @staticmethod
+    def _stamp_to_sec(stamp):
+        return float(stamp.sec) + float(stamp.nanosec) * 1e-9
 
     def _publish_debug_image(self, frame, corners, ids, header):
         if self.debug_image_pub is None:
