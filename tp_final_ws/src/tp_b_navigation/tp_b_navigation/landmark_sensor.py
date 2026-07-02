@@ -31,6 +31,7 @@ import tf2_ros
 from sensor_msgs.msg import LaserScan
 from geometry_msgs.msg import PoseArray, Pose, PointStamped
 from visualization_msgs.msg import Marker, MarkerArray
+from tp_interfaces.msg import LandmarkObservation, LandmarkObservationArray
 
 from tp_b_navigation.landmark_visibility import (
     camera_point_from_base,
@@ -112,6 +113,8 @@ class LandmarkSensor(Node):
             PoseArray, '/landmarks', self.landmarks_callback, qos_latched)
 
         self.pub_obs = self.create_publisher(PoseArray, '/observed_landmarks', 10)
+        self.pub_obs_ids = self.create_publisher(
+            LandmarkObservationArray, '/observed_landmark_ids', 10)
         self.pub_markers = self.create_publisher(MarkerArray, '/observed_landmarks_markers', 10)
 
         self.map_landmarks = None
@@ -143,6 +146,7 @@ class LandmarkSensor(Node):
         camera_in_base = self._camera_in_base()
 
         obs = PoseArray()
+        identified = LandmarkObservationArray()
         # Estampar con el tiempo de la TF que REALMENTE usamos (último disponible), no con el
         # stamp del /scan: el LIDAR de Gazebo estampa el scan ~20-60 ms adelante de su propia
         # TF odom->base, así que publicar con el stamp del scan deja la observación "en el
@@ -150,12 +154,13 @@ class LandmarkSensor(Node):
         # de la transform garantiza que la cadena map->odom->base sea válida en ese instante.
         obs.header.stamp = transform.header.stamp
         obs.header.frame_id = self.robot_frame
+        identified.header = obs.header
 
         angle_min = msg.angle_min
         r_min = msg.range_min
         r_max = msg.range_max
 
-        for landmark in self.map_landmarks.poses:
+        for index, landmark in enumerate(self.map_landmarks.poses):
             pt = PointStamped()
             pt.header = self.map_landmarks.header
             pt.point = landmark.position
@@ -181,9 +186,23 @@ class LandmarkSensor(Node):
                 occlusion_tol=self.occ_tol,
             )
             if reason == 'visible':
-                pose.position.x = float(r + np.random.normal(0.0, self.sigma_r))
+                noisy_r = float(r + np.random.normal(0.0, self.sigma_r))
+                noisy_theta = float(theta + np.random.normal(0.0, self.sigma_b))
+                pose.position.x = noisy_r
                 pose.position.y = 0.0
-                pose.position.z = float(theta + np.random.normal(0.0, self.sigma_b))
+                pose.position.z = noisy_theta
+                observation = LandmarkObservation()
+                observation.header = obs.header
+                observation.landmark_id = int(index)
+                observation.range_m = noisy_r
+                observation.bearing_rad = noisy_theta
+                observation.x_base = float(lx)
+                observation.y_base = float(ly)
+                observation.depth_m = 0.0
+                observation.reprojection_error_px = 0.0
+                observation.used_fallback_tf = False
+                observation.source_frame = self.robot_frame
+                identified.observations.append(observation)
             else:
                 pose.position.x = 0.0
                 pose.position.y = 0.0
@@ -194,6 +213,7 @@ class LandmarkSensor(Node):
                         f'r={r:.2f}, bearing={theta:.2f}')
             obs.poses.append(pose)
 
+        self.pub_obs_ids.publish(identified)
         self.pub_obs.publish(obs)
         if self.publish_markers:
             self._publish_markers(obs)

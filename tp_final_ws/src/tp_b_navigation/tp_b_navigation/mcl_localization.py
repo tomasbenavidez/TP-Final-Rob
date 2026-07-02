@@ -1,16 +1,20 @@
 #!/usr/bin/env python3
-"""mcl_localization: Localización Monte Carlo (filtro de partículas) sobre un mapa y un
-conjunto de landmarks CONOCIDOS y FIJOS (Sistema 3 de Parte B).
+"""mcl_localization: Localización Monte Carlo híbrida sobre mapa estático.
 
 A diferencia de FastSLAM (tps_viejos/tp5), acá los landmarks NO se estiman: vienen dados
 por /landmarks (frame map) y la asociación de datos es por índice (el sensor virtual
 publica una observación por landmark, en el mismo orden, con (0,0,0) si no es visible).
+
+El mapa NO se estima acá: viene de Parte A o del mapa simulado instalado. El
+filtro sólo estima la pose del robot.
 
 Flujo:
   - Predicción: por cada /odom se calcula el delta de movimiento (modelo de odometría
     δrot1, δtrans, δrot2) y se propaga cada partícula con ruido (sample motion model).
   - Corrección: por cada /observed_landmarks se pesa cada partícula con la verosimilitud
     gaussiana de las observaciones range/bearing respecto de los landmarks conocidos.
+  - Corrección láser: por cada /scan se compara una muestra de endpoints contra un
+    likelihood field derivado de /map.
   - Resampling low-variance cuando el número efectivo de partículas cae por debajo de N/2.
   - Inicialización: /initialpose (RViz "2D Pose Estimate") siembra las partículas.
   - Salida: /particlecloud (PoseArray) + /mcl_pose (PoseWithCovarianceStamped) +
@@ -20,10 +24,13 @@ Reutiliza la mecánica de pesos/resampling de tps_viejos/tp5/tp5/fastslam_node.p
 """
 
 import math
+from collections import deque
+from dataclasses import dataclass
 
 import numpy as np
 
 import rclpy
+import rclpy.time
 from rclpy.node import Node
 from rclpy.duration import Duration
 from rclpy.executors import ExternalShutdownException
@@ -36,17 +43,44 @@ from rclpy.qos import (
 )
 
 from nav_msgs.msg import Odometry
+from nav_msgs.msg import OccupancyGrid
+from sensor_msgs.msg import LaserScan
 from geometry_msgs.msg import (
     PoseArray, Pose, PoseWithCovarianceStamped, TransformStamped,
 )
-from tf2_ros import TransformBroadcaster
+from tf2_ros import Buffer, TransformBroadcaster, TransformListener
 from tp_interfaces.msg import LandmarkObservationArray
 
 from tp_b_navigation.utils import (
     normalize_angle, angle_diff, yaw_from_quaternion, quaternion_from_yaw,
 )
 from tp_b_navigation.landmark_io import load_landmark_map
+from tp_b_navigation.mcl_diagnostics import MclDiagnosticsCsv
+from tp_b_navigation.mcl_models import (
+    LikelihoodField,
+    LandmarkMeasurement,
+    landmark_log_likelihood,
+    laser_scan_log_likelihood,
+    legacy_pose_observations_to_measurements,
+)
 from tp_b_navigation.safety_gates import measurement_update_due
+
+
+@dataclass
+class OosSnapshot:
+    stamp: float
+    odom_pose: tuple[float, float, float]
+    particles: np.ndarray
+    weights: np.ndarray
+    estimate: tuple[float, float, float] | None
+
+
+@dataclass
+class OosMotionStep:
+    start_stamp: float
+    end_stamp: float
+    previous_odom: tuple[float, float, float]
+    current_odom: tuple[float, float, float]
 
 
 def predict_particles(
@@ -87,6 +121,78 @@ def predict_particles(
         np.cos(theta + rot1 + rot2),
     )
     return predicted
+
+
+def _effective_particle_count_for(weights):
+    denom = float(np.sum(np.asarray(weights, dtype=float) ** 2))
+    if denom <= 0.0 or not math.isfinite(denom):
+        return None
+    return 1.0 / denom
+
+
+def _resample_arrays(particles, weights, rough_xy, rough_yaw):
+    count = len(particles)
+    positions = (np.arange(count) + np.random.uniform()) / count
+    idx = np.zeros(count, dtype=int)
+    cumsum = np.cumsum(weights)
+    i = j = 0
+    while i < count:
+        if positions[i] < cumsum[j]:
+            idx[i] = j
+            i += 1
+        else:
+            j += 1
+    resampled = particles[idx].copy()
+    resampled[:, 0] += np.random.normal(0.0, rough_xy, count)
+    resampled[:, 1] += np.random.normal(0.0, rough_xy, count)
+    resampled[:, 2] += np.random.normal(0.0, rough_yaw, count)
+    return resampled, np.full(count, 1.0 / count)
+
+
+def _apply_log_likelihood_to_arrays(
+    particles,
+    weights,
+    log_w,
+    rough_xy,
+    rough_yaw,
+):
+    log_w = np.asarray(log_w, dtype=float)
+    finite_log_w = log_w[np.isfinite(log_w)]
+    if not finite_log_w.size:
+        return None
+    log_min = float(np.min(finite_log_w))
+    log_max = float(np.max(finite_log_w))
+    n_eff_before = _effective_particle_count_for(weights)
+    log_w = log_w.copy()
+    log_w -= np.max(log_w)
+    updated = np.exp(log_w) * weights
+    total = updated.sum()
+    reset_weights = False
+    resampled = False
+    if total <= 0 or not np.isfinite(total):
+        updated = np.full(len(weights), 1.0 / len(weights))
+        reset_weights = True
+    else:
+        updated = updated / total
+        n_eff = _effective_particle_count_for(updated)
+        if n_eff is not None and n_eff < len(weights) / 2.0:
+            particles, updated = _resample_arrays(
+                particles,
+                updated,
+                rough_xy=rough_xy,
+                rough_yaw=rough_yaw,
+            )
+            resampled = True
+    return {
+        'particles': particles,
+        'weights': updated,
+        'n_eff_before': n_eff_before,
+        'n_eff_after': _effective_particle_count_for(updated),
+        'resampled': resampled,
+        'reset_weights': reset_weights,
+        'log_min': log_min,
+        'log_max': log_max,
+    }
 
 
 def map_to_odom_pose(estimate, odom_pose):
@@ -138,6 +244,21 @@ class MCL(Node):
         # the future". Igual que en AMCL, default 0.1 s.
         self.declare_parameter('transform_tolerance', 0.1)
         self.declare_parameter('landmark_map_file', '')
+        self.declare_parameter('use_landmark_likelihood', True)
+        self.declare_parameter('use_laser_likelihood', True)
+        self.declare_parameter('laser_max_beams', 60)
+        self.declare_parameter('laser_sigma_hit', 0.18)
+        self.declare_parameter('laser_max_distance', 0.8)
+        self.declare_parameter('laser_log_weight', 1.0)
+        self.declare_parameter('landmark_log_weight', 1.0)
+        self.declare_parameter('occupied_pose_penalty', 20.0)
+        self.declare_parameter('max_landmark_measurement_age', 0.5)
+        self.declare_parameter('use_oos_landmark_updates', False)
+        self.declare_parameter('oos_max_observation_age', 4.0)
+        self.declare_parameter('oos_history_duration', 6.0)
+        self.declare_parameter('oos_max_snapshot_gap', 0.15)
+        self.declare_parameter('oos_replay_deterministic', True)
+        self.declare_parameter('diagnostics_csv', '')
 
         self.N = int(self.get_parameter('num_particles').value)
         self.a1 = float(self.get_parameter('alpha1').value)
@@ -156,6 +277,33 @@ class MCL(Node):
         self.odom_frame = self.get_parameter('odom_frame').value
         self.base_frame = self.get_parameter('base_frame').value
         self.transform_tolerance = float(self.get_parameter('transform_tolerance').value)
+        self.landmark_map_file = str(self.get_parameter('landmark_map_file').value)
+        self.use_landmark_likelihood = bool(
+            self.get_parameter('use_landmark_likelihood').value)
+        self.use_laser_likelihood = bool(
+            self.get_parameter('use_laser_likelihood').value)
+        self.laser_max_beams = int(self.get_parameter('laser_max_beams').value)
+        self.laser_sigma_hit = float(self.get_parameter('laser_sigma_hit').value)
+        self.laser_max_distance = float(
+            self.get_parameter('laser_max_distance').value)
+        self.laser_log_weight = float(self.get_parameter('laser_log_weight').value)
+        self.landmark_log_weight = float(
+            self.get_parameter('landmark_log_weight').value)
+        self.occupied_pose_penalty = float(
+            self.get_parameter('occupied_pose_penalty').value)
+        self.max_landmark_measurement_age = float(
+            self.get_parameter('max_landmark_measurement_age').value)
+        self.use_oos_landmark_updates = bool(
+            self.get_parameter('use_oos_landmark_updates').value)
+        self.oos_max_observation_age = float(
+            self.get_parameter('oos_max_observation_age').value)
+        self.oos_history_duration = float(
+            self.get_parameter('oos_history_duration').value)
+        self.oos_max_snapshot_gap = float(
+            self.get_parameter('oos_max_snapshot_gap').value)
+        self.oos_replay_deterministic = bool(
+            self.get_parameter('oos_replay_deterministic').value)
+        diagnostics_csv = str(self.get_parameter('diagnostics_csv').value)
 
         # --- Estado del filtro ---
         # particles: array Nx3 (x, y, theta) en frame map; weights: array N.
@@ -166,11 +314,22 @@ class MCL(Node):
         self.landmarks = None        # array Mx2 (posiciones conocidas en map)
         self.landmarks_by_id = {}
         self.last_motion_odom = None  # última pose usada por el modelo de movimiento
+        self.last_motion_stamp = None
         self.last_odom_pose = None    # pose de referencia para TF map->odom
         self.accum_d = 0.0           # movimiento acumulado desde la última corrección
         self.accum_a = 0.0
+        self.laser_accum_d = 0.0
+        self.laser_accum_a = 0.0
         self.allow_stationary_identified_correction = False
+        self.allow_stationary_laser_correction = False
         self.estimate = None         # (x, y, theta) estimado en map
+        self.likelihood_field = None
+        self.received_identified_landmarks = False
+        self.diagnostics = (
+            MclDiagnosticsCsv(diagnostics_csv) if diagnostics_csv else None
+        )
+        self._oos_snapshots = deque()
+        self._oos_motion_steps = deque()
 
         # --- QoS / pub-sub ---
         qos_latched = QoSProfile(
@@ -188,10 +347,13 @@ class MCL(Node):
         self.create_subscription(
             Odometry, reference_odom_topic, self.reference_odom_cb, qos_profile_sensor_data)
         self.create_subscription(PoseArray, '/observed_landmarks',
-                                 self.observation_cb, 10)
+                                 self.observation_cb, 1)
         self.create_subscription(
             LandmarkObservationArray, '/observed_landmark_ids',
-            self.identified_observation_cb, 10)
+            self.identified_observation_cb, 1)
+        self.create_subscription(OccupancyGrid, '/map', self.map_cb, qos_latched)
+        self.create_subscription(
+            LaserScan, '/scan', self.scan_cb, qos_profile_sensor_data)
         self.create_subscription(PoseWithCovarianceStamped, '/initialpose',
                                  self.initialpose_cb, 10)
 
@@ -199,15 +361,19 @@ class MCL(Node):
         self.pub_pose = self.create_publisher(
             PoseWithCovarianceStamped, '/mcl_pose', 10)
         self.tf_broadcaster = TransformBroadcaster(self)
+        self.tf_buffer = Buffer()
+        self.tf_listener = TransformListener(self.tf_buffer, self)
 
         rate = float(self.get_parameter('tf_publish_rate').value)
         self.create_timer(1.0 / rate, self.publish_tf)
 
-        landmark_map_file = self.get_parameter('landmark_map_file').value
-        if landmark_map_file:
-            self.landmarks_by_id = load_landmark_map(landmark_map_file)
+        if self.landmark_map_file:
+            self.landmarks_by_id = load_landmark_map(self.landmark_map_file)
             self.get_logger().info(
                 f'Cargados {len(self.landmarks_by_id)} landmarks ArUco con ID.')
+        if self.diagnostics is not None:
+            self.get_logger().info(
+                f'Diagnostico MCL CSV activo: {self.diagnostics.path}')
 
         self.get_logger().info(
             f'MCL iniciado con {self.N} partículas '
@@ -219,10 +385,25 @@ class MCL(Node):
     def landmarks_cb(self, msg: PoseArray):
         self.landmarks = np.array(
             [[p.position.x, p.position.y] for p in msg.poses], dtype=float)
-        if not self.landmarks_by_id:
+        # Si se cargó el JSON de Parte A, los IDs ArUco reales tienen prioridad.
+        # No los reemplazamos por índices virtuales de /landmarks.
+        if not getattr(self, 'landmark_map_file', '') and not self.landmarks_by_id:
             self.landmarks_by_id = {
                 index: tuple(point) for index, point in enumerate(self.landmarks)
             }
+
+    def map_cb(self, msg: OccupancyGrid):
+        if not self.use_laser_likelihood:
+            return
+        self.likelihood_field = LikelihoodField.from_occupancy(
+            msg.data,
+            width=msg.info.width,
+            height=msg.info.height,
+            resolution=msg.info.resolution,
+            origin_x=msg.info.origin.position.x,
+            origin_y=msg.info.origin.position.y,
+            max_distance=self.laser_max_distance,
+        )
 
     def initialpose_cb(self, msg: PoseWithCovarianceStamped):
         x = msg.pose.pose.position.x
@@ -237,7 +418,11 @@ class MCL(Node):
         self.initialized = True
         self.accum_d = 0.0
         self.accum_a = 0.0
+        self.laser_accum_d = 0.0
+        self.laser_accum_a = 0.0
         self.allow_stationary_identified_correction = True
+        self.allow_stationary_laser_correction = True
+        self._clear_oos_history()
         self._update_estimate()
         self.get_logger().info(
             f'Pose inicial fijada en ({x:.2f}, {y:.2f}, {math.degrees(yaw):.0f}°).')
@@ -250,17 +435,34 @@ class MCL(Node):
     def motion_odom_cb(self, msg: Odometry):
         p = msg.pose.pose
         cur = (p.position.x, p.position.y, yaw_from_quaternion(p.orientation))
+        stamp = self._message_stamp_sec(msg)
+        if stamp is None:
+            stamp = getattr(self, 'last_motion_stamp', None)
+            if stamp is None:
+                try:
+                    stamp = self._now_sec()
+                except AttributeError:
+                    stamp = 0.0
 
         if not self.initialized:
             self.last_motion_odom = cur
+            self.last_motion_stamp = stamp
             return
         if self.last_motion_odom is None:
             self.last_motion_odom = cur
+            self.last_motion_stamp = stamp
+            self._record_oos_snapshot(stamp, cur)
             return
 
+        prev = self.last_motion_odom
+        prev_stamp = getattr(self, 'last_motion_stamp', None)
         self._predict(self.last_motion_odom, cur)
+        if prev_stamp is not None:
+            self._record_oos_motion_step(prev_stamp, stamp, prev, cur)
         self.last_motion_odom = cur
+        self.last_motion_stamp = stamp
         self._update_estimate()
+        self._record_oos_snapshot(stamp, cur)
         self.publish_particles()
         self.publish_pose()
 
@@ -274,6 +476,10 @@ class MCL(Node):
         )
 
     def observation_cb(self, msg: PoseArray):
+        if not getattr(self, 'use_landmark_likelihood', True):
+            return
+        if getattr(self, 'received_identified_landmarks', False):
+            return
         if not self.initialized or self.landmarks is None:
             return
         # Sólo corregimos si hubo movimiento apreciable (evita degeneración estática).
@@ -284,12 +490,17 @@ class MCL(Node):
             self.update_min_a,
         ):
             return
+        measurement_stamp = self._message_stamp_sec(msg)
+        if not self._measurement_is_fresh(measurement_stamp):
+            return
         used = self._correct(msg)
         if used:
             self.accum_d = 0.0
             self.accum_a = 0.0
 
     def identified_observation_cb(self, msg: LandmarkObservationArray):
+        if not getattr(self, 'use_landmark_likelihood', True):
+            return
         if not self.initialized or not self.landmarks_by_id:
             return
         if not measurement_update_due(
@@ -300,16 +511,79 @@ class MCL(Node):
             allow_stationary=self.allow_stationary_identified_correction,
         ):
             return
+        measurement_stamp = self._message_stamp_sec(msg)
         measurements = [
-            (int(obs.landmark_id), float(obs.range_m), float(obs.bearing_rad))
+            LandmarkMeasurement(
+                int(obs.landmark_id), float(obs.range_m),
+                float(obs.bearing_rad), 'identified')
             for obs in msg.observations
             if obs.range_m > 0.0 and int(obs.landmark_id) in self.landmarks_by_id
         ]
-        used = self._correct_measurements(measurements)
+        if measurements:
+            self.received_identified_landmarks = True
+        if self._measurement_is_fresh(measurement_stamp):
+            used = self._correct_measurements(
+                measurements,
+                source='identified',
+                measurement_stamp=measurement_stamp,
+            )
+        elif self._measurement_can_use_oos(measurement_stamp):
+            used = self._correct_measurements_oos(
+                measurements,
+                source='identified',
+                measurement_stamp=measurement_stamp,
+            )
+        else:
+            used = 0
         if used:
             self.accum_d = 0.0
             self.accum_a = 0.0
             self.allow_stationary_identified_correction = False
+
+    def scan_cb(self, msg: LaserScan):
+        if not self.use_laser_likelihood:
+            return
+        if not self.initialized or self.likelihood_field is None:
+            return
+        if not measurement_update_due(
+            self.laser_accum_d,
+            self.laser_accum_a,
+            self.update_min_d,
+            self.update_min_a,
+            allow_stationary=self.allow_stationary_laser_correction,
+        ):
+            return
+        try:
+            sensor_pose = self._sensor_pose_in_base(msg)
+        except Exception as exc:  # noqa: BLE001
+            self.get_logger().warn(
+                f'TF {msg.header.frame_id}->{self.base_frame} no disponible '
+                f'para likelihood laser: {exc}',
+                throttle_duration_sec=2.0,
+            )
+            return
+        log_w, used = laser_scan_log_likelihood(
+            self.particles,
+            ranges=msg.ranges,
+            angle_min=msg.angle_min,
+            angle_increment=msg.angle_increment,
+            range_min=msg.range_min,
+            range_max=msg.range_max,
+            sensor_pose=sensor_pose,
+            field=self.likelihood_field,
+            max_beams=self.laser_max_beams,
+            sigma_hit=self.laser_sigma_hit,
+            occupied_pose_penalty=self.occupied_pose_penalty,
+            log_weight=self.laser_log_weight,
+        )
+        detail = f'frame={msg.header.frame_id};beams={used}'
+        if self._apply_log_likelihood(
+            log_w, used, 'laser', detail,
+            measurement_stamp=self._stamp_to_sec(msg.header.stamp),
+        ):
+            self.laser_accum_d = 0.0
+            self.laser_accum_a = 0.0
+            self.allow_stationary_laser_correction = False
 
     # ------------------------------------------------------------ modelo de movimiento
     def _predict(self, prev, cur):
@@ -319,6 +593,11 @@ class MCL(Node):
         dtrans = math.hypot(dx, dy)
         self.accum_d += dtrans
         self.accum_a += abs(angle_diff(cur[2], prev[2]))
+        self.laser_accum_d = getattr(self, 'laser_accum_d', 0.0) + dtrans
+        self.laser_accum_a = (
+            getattr(self, 'laser_accum_a', 0.0) +
+            abs(angle_diff(cur[2], prev[2]))
+        )
         self.particles = predict_particles(
             self.particles,
             previous_odom=prev,
@@ -330,46 +609,158 @@ class MCL(Node):
     # ------------------------------------------------------------ modelo de medición
     def _correct(self, msg: PoseArray):
         """Pesa las partículas con la verosimilitud de las observaciones range/bearing."""
-        m = min(len(msg.poses), len(self.landmarks))
-        measurements = []
-        for index in range(m):
-            range_m = msg.poses[index].position.x
-            bearing = msg.poses[index].position.z
-            if range_m == 0.0 and bearing == 0.0:
-                continue
-            measurements.append((index, range_m, bearing))
-        return self._correct_measurements(measurements)
+        measurements = legacy_pose_observations_to_measurements(
+            msg.poses[:len(self.landmarks)])
+        return self._correct_measurements(
+            measurements,
+            source='legacy_landmark',
+            measurement_stamp=self._message_stamp_sec(msg),
+        )
 
-    def _correct_measurements(self, measurements):
-        log_w = np.zeros(self.N)
-        used = 0
+    def _correct_measurements(
+        self,
+        measurements,
+        source='landmark',
+        measurement_stamp=None,
+    ):
+        log_w, used = landmark_log_likelihood(
+            self.particles,
+            measurements,
+            self.landmarks_by_id,
+            sigma_range=self.sigma_r,
+            sigma_bearing=self.sigma_b,
+            log_weight=getattr(self, 'landmark_log_weight', 1.0),
+        )
+        ids = ';'.join(str(self._measurement_id(m)) for m in measurements)
+        detail = f'source={source};ids={ids}'
+        return used if self._apply_log_likelihood(
+            log_w, used, 'landmark', detail,
+            measurement_stamp=measurement_stamp,
+        ) else 0
 
-        px = self.particles[:, 0]
-        py = self.particles[:, 1]
-        pth = self.particles[:, 2]
+    def _correct_measurements_oos(
+        self,
+        measurements,
+        source='landmark',
+        measurement_stamp=None,
+    ):
+        if not measurements or measurement_stamp is None:
+            return 0
+        snapshot = self._find_oos_snapshot(measurement_stamp)
+        ids = ';'.join(str(self._measurement_id(m)) for m in measurements)
+        age = self._now_sec() - measurement_stamp
+        if snapshot is None:
+            self._record_oos_drop(
+                measurement_stamp=measurement_stamp,
+                reason='no_history',
+                detail=f'source={source};ids={ids};age_sec={age:.3f}',
+            )
+            return 0
+        snapshot_dt = measurement_stamp - snapshot.stamp
+        if snapshot_dt < -1e-9 or snapshot_dt > getattr(
+            self, 'oos_max_snapshot_gap', 0.15
+        ):
+            self._record_oos_drop(
+                measurement_stamp=measurement_stamp,
+                reason='snapshot_gap',
+                detail=(
+                    f'source={source};ids={ids};age_sec={age:.3f};'
+                    f'snapshot_dt_sec={snapshot_dt:.3f}'
+                ),
+            )
+            return 0
 
-        inv_2sr2 = 1.0 / (2.0 * self.sigma_r ** 2)
-        inv_2sb2 = 1.0 / (2.0 * self.sigma_b ** 2)
-
-        for landmark_id, r, phi in measurements:
-            if landmark_id not in self.landmarks_by_id:
-                continue
-            used += 1
-
-            lmx, lmy = self.landmarks_by_id[landmark_id]
-            dx = lmx - px
-            dy = lmy - py
-            r_hat = np.hypot(dx, dy)
-            phi_hat = np.arctan2(dy, dx) - pth
-
-            dr = r - r_hat
-            # diferencia angular vectorizada y normalizada
-            dphi = np.arctan2(np.sin(phi - phi_hat), np.cos(phi - phi_hat))
-
-            log_w += -(dr * dr) * inv_2sr2 - (dphi * dphi) * inv_2sb2
-
+        historical_particles = snapshot.particles.copy()
+        historical_weights = snapshot.weights.copy()
+        log_w, used = landmark_log_likelihood(
+            historical_particles,
+            measurements,
+            self.landmarks_by_id,
+            sigma_range=self.sigma_r,
+            sigma_bearing=self.sigma_b,
+            log_weight=getattr(self, 'landmark_log_weight', 1.0),
+        )
         if used == 0:
             return 0
+        result = _apply_log_likelihood_to_arrays(
+            historical_particles,
+            historical_weights,
+            log_w,
+            rough_xy=getattr(self, 'rough_xy', 0.0),
+            rough_yaw=getattr(self, 'rough_yaw', 0.0),
+        )
+        if result is None:
+            return 0
+
+        replayed_particles = result['particles']
+        replay_steps = self._oos_motion_steps_after(snapshot.stamp)
+        for step in replay_steps:
+            replayed_particles = predict_particles(
+                replayed_particles,
+                previous_odom=step.previous_odom,
+                current_odom=step.current_odom,
+                alphas=(0.0, 0.0, 0.0, 0.0),
+                rng=np.random,
+            )
+
+        estimate_before = getattr(self, 'estimate', None)
+        self.particles = replayed_particles
+        self.weights = result['weights']
+        self._update_estimate()
+        self._record_diagnostic(
+            event='landmark_oos',
+            used=used,
+            n_eff_before=result['n_eff_before'],
+            n_eff_after=result['n_eff_after'],
+            resampled=result['resampled'],
+            reset_weights=result['reset_weights'],
+            estimate_before=estimate_before,
+            estimate_after=getattr(self, 'estimate', None),
+            measurement_stamp=measurement_stamp,
+            log_likelihood_min=result['log_min'],
+            log_likelihood_max=result['log_max'],
+            detail=(
+                f'source={source};ids={ids};age_sec={age:.3f};'
+                f'snapshot_dt_sec={snapshot_dt:.3f};'
+                f'replay_steps={len(replay_steps)}'
+            ),
+        )
+        last_stamp = getattr(self, 'last_motion_stamp', None)
+        last_odom = getattr(self, 'last_motion_odom', None)
+        if last_stamp is not None and last_odom is not None:
+            self._record_oos_snapshot(last_stamp, last_odom)
+        self.publish_particles()
+        self.publish_pose()
+        return used
+
+    @staticmethod
+    def _measurement_id(measurement):
+        if hasattr(measurement, 'landmark_id'):
+            return measurement.landmark_id
+        return measurement[0]
+
+    def _apply_log_likelihood(
+        self,
+        log_w,
+        used,
+        event='',
+        detail='',
+        measurement_stamp=None,
+    ):
+        if used == 0:
+            return False
+
+        log_w = np.asarray(log_w, dtype=float)
+        finite_log_w = log_w[np.isfinite(log_w)]
+        if finite_log_w.size:
+            log_min = float(np.min(finite_log_w))
+            log_max = float(np.max(finite_log_w))
+        else:
+            return False
+        estimate_before = getattr(self, 'estimate', None)
+        n_eff_before = self._effective_particle_count()
+        resampled = False
+        reset_weights = False
 
         # De log-pesos a pesos normalizados (estable numéricamente).
         log_w -= np.max(log_w)
@@ -377,16 +768,242 @@ class MCL(Node):
         total = w.sum()
         if total <= 0 or not np.isfinite(total):
             self.weights = np.full(self.N, 1.0 / self.N)
+            reset_weights = True
         else:
             self.weights = w / total
             n_eff = 1.0 / np.sum(self.weights ** 2)
             if n_eff < self.N / 2.0:
                 self._resample()
+                resampled = True
 
         self._update_estimate()
+        self._record_diagnostic(
+            event=event,
+            used=used,
+            n_eff_before=n_eff_before,
+            n_eff_after=self._effective_particle_count(),
+            resampled=resampled,
+            reset_weights=reset_weights,
+            estimate_before=estimate_before,
+            estimate_after=getattr(self, 'estimate', None),
+            measurement_stamp=measurement_stamp,
+            log_likelihood_min=log_min,
+            log_likelihood_max=log_max,
+            detail=detail,
+        )
         self.publish_particles()
         self.publish_pose()
-        return used
+        return True
+
+    def _effective_particle_count(self):
+        weights = getattr(self, 'weights', None)
+        if weights is None:
+            return None
+        denom = float(np.sum(weights ** 2))
+        if denom <= 0.0 or not math.isfinite(denom):
+            return None
+        return 1.0 / denom
+
+    def _covariance_diag(self):
+        if self.estimate is None or self.particles is None or self.weights is None:
+            return 0.0, 0.0, 0.0
+        x, y, yaw = self.estimate
+        dx = self.particles[:, 0] - x
+        dy = self.particles[:, 1] - y
+        dth = np.arctan2(
+            np.sin(self.particles[:, 2] - yaw),
+            np.cos(self.particles[:, 2] - yaw),
+        )
+        return (
+            float(np.sum(self.weights * dx * dx)),
+            float(np.sum(self.weights * dy * dy)),
+            float(np.sum(self.weights * dth * dth)),
+        )
+
+    def _record_diagnostic(
+        self,
+        *,
+        event,
+        used,
+        n_eff_before,
+        n_eff_after,
+        resampled,
+        reset_weights,
+        estimate_before,
+        estimate_after,
+        measurement_stamp,
+        log_likelihood_min,
+        log_likelihood_max,
+        detail,
+    ):
+        diagnostics = getattr(self, 'diagnostics', None)
+        if diagnostics is None:
+            return
+        stamp = self.get_clock().now()
+        stamp_sec = stamp.nanoseconds * 1e-9
+        diagnostics.write_update(
+            stamp_sec=stamp_sec,
+            measurement_stamp_sec=measurement_stamp,
+            event=event,
+            used=used,
+            n_eff_before=n_eff_before,
+            n_eff_after=n_eff_after,
+            resampled=resampled,
+            reset_weights=reset_weights,
+            estimate_before=estimate_before,
+            estimate_after=estimate_after,
+            covariance_diag=self._covariance_diag(),
+            weight_max=float(np.max(self.weights)),
+            log_likelihood_min=log_likelihood_min,
+            log_likelihood_max=log_likelihood_max,
+            accum_d=getattr(self, 'accum_d', 0.0),
+            accum_a=getattr(self, 'accum_a', 0.0),
+            laser_accum_d=getattr(self, 'laser_accum_d', 0.0),
+            laser_accum_a=getattr(self, 'laser_accum_a', 0.0),
+            detail=detail,
+        )
+
+    def _record_oos_drop(self, *, measurement_stamp, reason, detail):
+        diagnostics = getattr(self, 'diagnostics', None)
+        if diagnostics is None:
+            return
+        stamp = self.get_clock().now()
+        diagnostics.write_update(
+            stamp_sec=stamp.nanoseconds * 1e-9,
+            measurement_stamp_sec=measurement_stamp,
+            event='landmark_oos_drop',
+            used=0,
+            n_eff_before=self._effective_particle_count(),
+            n_eff_after=self._effective_particle_count(),
+            resampled=False,
+            reset_weights=False,
+            estimate_before=getattr(self, 'estimate', None),
+            estimate_after=getattr(self, 'estimate', None),
+            covariance_diag=self._covariance_diag(),
+            weight_max=float(np.max(self.weights)) if self.weights is not None else 0.0,
+            log_likelihood_min=0.0,
+            log_likelihood_max=0.0,
+            accum_d=getattr(self, 'accum_d', 0.0),
+            accum_a=getattr(self, 'accum_a', 0.0),
+            laser_accum_d=getattr(self, 'laser_accum_d', 0.0),
+            laser_accum_a=getattr(self, 'laser_accum_a', 0.0),
+            detail=f'reason={reason};{detail}',
+        )
+
+    @staticmethod
+    def _stamp_to_sec(stamp):
+        return float(stamp.sec) + float(stamp.nanosec) * 1e-9
+
+    def _measurement_is_fresh(self, measurement_stamp):
+        max_age = getattr(self, 'max_landmark_measurement_age', 0.0)
+        if max_age <= 0.0 or measurement_stamp is None:
+            return True
+        age = self._now_sec() - measurement_stamp
+        return age <= max_age
+
+    def _measurement_can_use_oos(self, measurement_stamp):
+        if not getattr(self, 'use_oos_landmark_updates', False):
+            return False
+        if measurement_stamp is None:
+            return False
+        age = self._now_sec() - measurement_stamp
+        max_age = getattr(self, 'oos_max_observation_age', 4.0)
+        return 0.0 <= age <= max_age
+
+    def _now_sec(self):
+        return self.get_clock().now().nanoseconds * 1e-9
+
+    @staticmethod
+    def _message_stamp_sec(msg):
+        header = getattr(msg, 'header', None)
+        stamp = getattr(header, 'stamp', None)
+        if stamp is None:
+            return None
+        return MCL._stamp_to_sec(stamp)
+
+    def _clear_oos_history(self):
+        self._oos_snapshots = deque()
+        self._oos_motion_steps = deque()
+
+    def _record_oos_snapshot(self, stamp, odom_pose):
+        if stamp is None or self.particles is None or self.weights is None:
+            return
+        snapshots = getattr(self, '_oos_snapshots', None)
+        if snapshots is None:
+            self._oos_snapshots = deque()
+            snapshots = self._oos_snapshots
+        elif not hasattr(snapshots, 'popleft'):
+            self._oos_snapshots = deque(snapshots)
+            snapshots = self._oos_snapshots
+        snapshots.append(OosSnapshot(
+            stamp=float(stamp),
+            odom_pose=tuple(odom_pose),
+            particles=np.asarray(self.particles, dtype=float).copy(),
+            weights=np.asarray(self.weights, dtype=float).copy(),
+            estimate=getattr(self, 'estimate', None),
+        ))
+        self._prune_oos_history(float(stamp))
+
+    def _record_oos_motion_step(self, start_stamp, end_stamp, previous_odom, current_odom):
+        if start_stamp is None or end_stamp is None:
+            return
+        steps = getattr(self, '_oos_motion_steps', None)
+        if steps is None:
+            self._oos_motion_steps = deque()
+            steps = self._oos_motion_steps
+        elif not hasattr(steps, 'popleft'):
+            self._oos_motion_steps = deque(steps)
+            steps = self._oos_motion_steps
+        if float(end_stamp) < float(start_stamp):
+            return
+        steps.append(OosMotionStep(
+            start_stamp=float(start_stamp),
+            end_stamp=float(end_stamp),
+            previous_odom=tuple(previous_odom),
+            current_odom=tuple(current_odom),
+        ))
+        self._prune_oos_history(float(end_stamp))
+
+    def _prune_oos_history(self, newest_stamp):
+        cutoff = newest_stamp - getattr(self, 'oos_history_duration', 6.0)
+        snapshots = getattr(self, '_oos_snapshots', deque())
+        while snapshots and snapshots[0].stamp < cutoff:
+            snapshots.popleft()
+        steps = getattr(self, '_oos_motion_steps', deque())
+        while steps and steps[0].end_stamp < cutoff:
+            steps.popleft()
+
+    def _find_oos_snapshot(self, measurement_stamp):
+        snapshots = list(getattr(self, '_oos_snapshots', []))
+        selected = None
+        for snapshot in snapshots:
+            if snapshot.stamp <= measurement_stamp:
+                selected = snapshot
+            else:
+                break
+        return selected
+
+    def _oos_motion_steps_after(self, snapshot_stamp):
+        return [
+            step for step in getattr(self, '_oos_motion_steps', [])
+            if step.end_stamp > snapshot_stamp
+        ]
+
+    def _sensor_pose_in_base(self, scan: LaserScan):
+        sensor_frame = scan.header.frame_id or self.base_frame
+        if sensor_frame == self.base_frame:
+            return 0.0, 0.0, 0.0
+        transform = self.tf_buffer.lookup_transform(
+            self.base_frame,
+            sensor_frame,
+            rclpy.time.Time.from_msg(scan.header.stamp),
+        )
+        tr = transform.transform
+        return (
+            tr.translation.x,
+            tr.translation.y,
+            yaw_from_quaternion(tr.rotation),
+        )
 
     def _resample(self):
         """Resampling low-variance (sistemático)."""
@@ -480,6 +1097,12 @@ class MCL(Node):
         t.transform.translation.y = y_mo
         t.transform.rotation = quaternion_from_yaw(th_mo)
         self.tf_broadcaster.sendTransform(t)
+
+    def destroy_node(self):
+        diagnostics = getattr(self, 'diagnostics', None)
+        if diagnostics is not None:
+            diagnostics.close()
+        return super().destroy_node()
 
 
 def main(args=None):
